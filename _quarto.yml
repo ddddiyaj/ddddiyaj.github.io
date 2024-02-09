@@ -12,7 +12,7 @@ website:
 
 format:
   html:
-    theme: Litera
+    theme: Sandstone
     css: styles.css
     toc: true
 

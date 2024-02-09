@@ -1,12 +1,19 @@
 ---
-title: "Diya Jiang"
+title: "Welcome to my page!"
 about: 
   template: jolla
   image: photo/diya Jiang headshot.jpg
   links: 
     - icon: file-pdf
-      text: CV
-      href: my_cv.pdf
+      text: CV (2023)
+      href: Diya-Jiang-Resume_2023.docx
+    - icon: twitter
+      text: Twitter
+      href: https://twitter.com/DDDDIYAj
+    - icon: email
+      text: diya.jiang@mail.mcgill.ca
 ---
 
-I am a researcher specializing in International Relations and Foreign Policy Analysis. I am currently pursing a PhD in Political Science at McGill University.
+I am a researcher specializing in International Relations and Foreign Policy Analysis with a focus on Supply Chain geopolitics and Public Opinion. I am currently pursuing a Ph.D. in Political Science at McGill University and a Research Fellow at the Central European Institute of Asian Studies. Before my PhD, I completed an MSc in International Political Economy at the London School of Economics and a Bachelor's degree in Quantitative Economics and Journalism at New York University
+
+My Research focuses on investigating the political, economic, and social consequences of US-China Rivalry. Much of my work also engages with Canadian Foreign Policy, International soft-power dynamics, and debates surrounding de/re-globalization. In addition, I hold a special interest in advanced methodology in the quantitative realm.

@@ -1,5 +1,39 @@
 ---
 title: "Research"
 about: 
-  template: trestles
+  template: marquee
 ---
+
+# Publications
+
+## Academic
+
+-   \"Foreign contributors to democratic backsliding: the effects of linkages with China on media self-censorship in transitional regimes.\" 2022. in Canadian Foreign Policy Journal. Coauthor: Benjamin Toettoe.
+
+-    \"Unraveling Chinese Bilateral Diplomatic Behavior: Evidence from Post-Coup Sino-Myanmar Relations, a Rational Choice Approach.\" 2023. In International Journal of China studies. Coauthor: Kristina Kironska
+
+-   \"From Cautious Foes to Nervous Friends: China-Myanmar Relationship after 1 February Coup\" in After the Coup, ANU Press: December 2023. Coauthor: Kristina Kironska
+
+## Media/ Policy
+
+-   \"Chinese Media\'s Conflicting Narratives on the Myanmar Coup.\" Published in The Diplomat Aug 14 2021. Coauthor: Kristina Kironska
+
+-   \"Trans-Atlantic public opinion on China: Great Power Competition amidst Russian invasion of Ukraine.\" Central European Institute of Asian Studies. 2022. Coauthor list: <https://ceias.eu/trans-atlantic-public-opinion-on-china/>
+
+-   "Beijing's Economic Staeks: Lessons from Post-coup Sino-Myanmar Relations" in Tea Circle. Nov 27, 2023.
+
+# Working Project
+
+-   "Quebec in the Age of Renewed Great Power Rivalry: An Analysis of Foreign Policy Preferences in the Province". Stage: Drafting
+
+-   "Allies at Heart? A Study of Ideational Continentalism in Canadians' Foreign Policy Attitudes". Coauthors: Benjamin Toettoe, Richard Turcsanyi. Stage: Under Review.
+
+# Conference
+
+-   Presented \"Can Chinese Cultural identity translate to Sino-aligned foreign policy preferences in Singapore? A study of values and identity in Foreign Policy analysis.\" Sinophone Borderline Survey Workship in Olomouc, Czechia, September 2022.
+
+-   Co-presented \"United in Opposition? An Investigation of National Identity as a Determinant of Canadians\' Foreign Policy Preferences on Alignment in the US-China Rivalry\" at ISA 2023, Montreal, QC, Canada.
+
+-   \"Foreign Policy preferences in Quebec in the context of US-China Rivalry: An Analysis of Public Opinion\" at CPSA 2023, Toronto, ON, Canada.
+
+-   Presented \" Attitudes toward US-China rivalry\" at MapleMeth 2023, London, ON, Canada.
