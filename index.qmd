@@ -1,0 +1,12 @@
+---
+title: "Diya Jiang"
+about: 
+  template: jolla
+  image: photo/diya Jiang headshot.jpg
+  links: 
+    - icon: file-pdf
+      text: CV
+      href: my_cv.pdf
+---
+
+I am a researcher specializing in International Relations and Foreign Policy Analysis. I am currently pursing a PhD in Political Science at McGill University.
