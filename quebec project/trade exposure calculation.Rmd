@@ -1,0 +1,952 @@
+---
+title: "trade exposure calculation"
+author: "Diya Jiang"
+date: "2024-06-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# load packages
+```{r}
+library(tidyverse)
+library(knitr)
+library(dplyr)
+library(psych)
+library(kableExtra)
+library(sjPlot)#
+library(sjmisc)
+library(sjlabelled)
+library(readxl)
+library(ltm)
+library(stargazer)
+library(haven)
+```
+
+
+
+# GDP +trade
+- first import data
+```{r}
+dt_trade<- read.csv("C:/Users/diyaj/Downloads/PhD/Project/Quebec/export to US by industry.csv")
+dt_gdp<-read.csv("C:/Users/diyaj/Downloads/PhD/Project/Quebec/gdp hopefully this is it.csv")
+dt_trade
+summary(dt_gdp$REF_DATE)
+dt_gdp <- dt_gdp %>%
+  mutate(NAICS_code = str_extract(North.American.Industry.Classification.System..NAICS., "\\d+[A-Z]?"))
+dt_gdp$Year <- substr(dt_gdp$REF_DATE, 1, 4)
+annual_gdp <- dt_gdp %>%
+  group_by(Year, NAICS_code) %>%
+  summarize(VALUE = sum(VALUE, na.rm = TRUE), .groups = 'drop')
+annual_gdp
+dt_gdp_raw <- dt_gdp
+dt_gdp <-annual_gdp
+```
+transform dt_trade to match the code of GDP
+```{r}
+class(dt_trade$naics_code)
+dt_trade$naics_code<-as.character(dt_trade$naics_code)
+dt_trade <- dt_trade %>%
+  mutate(naics_code_new = case_when(
+    str_detect(naics_code, "^111\\d") ~ "111",
+    str_detect(naics_code, "^112\\d") ~ "112",
+    str_detect(naics_code, "^113\\d") ~ "113",
+    str_detect(naics_code, "^114\\d") ~ "114",
+    str_detect(naics_code, "^115\\d") ~ "115",
+    str_detect(naics_code, "^2111") ~ "211",
+    str_detect(naics_code, "^323\\d") ~ "323",
+    str_detect(naics_code, "^327\\d") ~ "327",
+    str_detect(naics_code, "^324\\d") ~ "324",
+    naics_code == "3322" ~ "332A",
+    naics_code == "3329" ~ "332A",
+    naics_code == "3343" ~ "334A",
+    naics_code == "3345" ~ "334A",
+    naics_code == "3346" ~ "334A",
+    naics_code == "3131" ~ "31A",
+    naics_code == "3132" ~ "31A",
+    naics_code == "3133" ~ "31A",
+    naics_code == "3131" ~ "31A",
+    naics_code == "3141" ~ "31B",
+    naics_code == "3149" ~ "31B",
+    naics_code == "3151" ~ "31B",
+    naics_code == "3152" ~ "31B",
+    naics_code == "3159" ~ "31B",
+    naics_code == "3161" ~ "31B",
+    naics_code == "3162" ~ "31B",
+    naics_code == "3169" ~ "31B",
+    TRUE ~ naics_code
+  )) 
+
+
+dt_trade_aggregated <- dt_trade %>%
+  group_by(naics_code_new, year) %>% 
+  summarize(Export = sum(export, na.rm = TRUE),
+            industry = first(industry),
+            .groups = 'drop')
+dt_trade_aggregated
+```
+
+ok some of the dt_gdp also needs to be transformed
+```{r}
+gdp_3121 <- dt_gdp %>%
+  filter(str_detect(NAICS_code, "^3121[1A]?")) %>%
+  group_by(Year) %>%
+  summarize(
+    NAICS_code = "3121",
+    VALUE = sum(VALUE, na.rm = TRUE),
+    .groups = 'drop'
+  )
+gdp_3121
+dt_gdp
+
+# Step 2: Combine the aggregated row back to the dt_gdp
+dt_gdp <- dt_gdp %>%
+  bind_rows(gdp_3121)
+dt_gdp
+```
+
+
+match the two together
+```{r}
+dt_trade$naics_code<-as.character(dt_trade$naics_code)
+dt_trade_aggregated$year<-as.character(dt_trade_aggregated$year)
+class(dt_trade$year)
+trade_exposure <- dt_trade_aggregated %>%
+  left_join(dt_gdp, by = c("year"="Year", "naics_code_new" = "NAICS_code"))
+trade_exposure
+summary(as.factor(trade_exposure$VALUE)) #54 NAs
+```
+ok clearly there are some codes that do not exist in the GDP doc. let's lookinto this
+```{r}
+trade_exposure %>% 
+  filter(is.na(VALUE)) %>% 
+  distinct(naics_code_new,industry)
+# yay there's no more NAs
+```
+
+## calcualte trade exposure
+```{r}
+
+# first, let's only keep the ones we need
+trade_exposure_raw<-trade_exposure
+trade_exposure$gdp<-trade_exposure$VALUE
+trade_exposure<-subset(trade_exposure,select = c(naics_code_new, year, Export, industry, gdp))
+trade_exposure
+
+#ok looks like gdp is in millions but export is not so let's convert
+trade_exposure$Export<-trade_exposure$Export/1000000
+summary(trade_exposure$Export)
+summary(trade_exposure$gdp)
+# note that Export is current value so we need to apply CPI
+# Create a tibble with the CPI data
+cpi_data <- tibble(
+  year = c(2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022),
+  CPI = c(125.2, 126.6, 128.4, 130.4, 133.4, 136.0, 137.0, 141.6, 151.2)
+)
+
+# Set the base year CPI to 100 for 2017 constant dollars
+base_year_cpi <- cpi_data %>%
+  filter(year == 2017) %>%
+  pull(CPI)
+cpi_data <- cpi_data %>%
+  mutate(Adjustment_Factor = base_year_cpi / CPI)
+
+cpi_data
+cpi_data$year<-as.character(cpi_data$year)
+
+# Join the CPI data with the trade_exposure data
+trade_exposure <- trade_exposure %>%
+  left_join(cpi_data, by = "year") %>%
+  mutate(Export_2017 = Export * Adjustment_Factor)
+
+# View the adjusted trade data
+print(trade_exposure)
+
+
+trade_exposure$us_expo<- trade_exposure$Export_2017/trade_exposure$gdp
+summary(trade_exposure$us_expo)# it makes no sense there's something higher
+# finallyyyy
+trade_exposure$score_unadjusted<-trade_exposure$Export/trade_exposure$gdp
+summary(trade_exposure$score_unadjusted) # more or less the same
+write.csv(trade_exposure,"trade exposure final.csv")
+```
+
+# CSD by industry
+```{r}
+dt_csd<-read.csv("C:/Users/diyaj/Downloads/PhD/Project/Quebec/CSD employment by industry.csv")
+dt_csd
+dt_csd <- dt_csd %>%
+  mutate(NAICS_code = str_extract(dt_csd$North.American.Industry.Classification.System..NAICS., "\\d+[A-Z]?"))
+dt_csd
+dt_csd_raw<-dt_csd
+dt_csd<-subset(dt_csd,select = c(North.American.Industry.Classification.System..NAICS.,NAICS_code,geo_unique_id,GEO,VALUE))
+```
+
+ok let's find the total employment
+```{r}
+dt_csd
+# this gives me total employment by geo
+total_employment <- dt_csd %>%
+  filter(NAICS_code == "1") %>%
+  group_by(geo_unique_id) %>%
+  summarize(Total_Employment = max(VALUE),
+            .groups = 'drop')
+total_employment
+dt_csd <- dt_csd %>%
+  left_join(total_employment, by = "geo_unique_id")
+dt_csd$per_employment<-dt_csd$VALUE/dt_csd$Total_Employment
+dt_csd
+
+```
+
+merge the right columns
+```{r}
+csd_3121 <- dt_csd %>%
+  filter(str_detect(NAICS_code, "^3121[1A]?")) %>%
+  group_by(geo_unique_id) %>% 
+  summarize(
+    NAICS_code = "3121",
+    VALUE = sum(VALUE, na.rm = TRUE),
+    Total_Employment=sum(Total_Employment,na.rm = T),
+    per_employment = sum(per_employment),
+    .groups = 'drop'
+  )
+csd_3121
+
+# Step 2: Combine the aggregated row back to the dt_gdp
+dt_csd <- dt_csd %>%
+  bind_rows(csd_3121)
+dt_csd
+```
+
+ok let's make sure they match
+```{r}
+dt_csd$NAICS_code
+dt_csd <- dt_csd %>%
+  mutate(naics_code_new = case_when(
+    NAICS_code == "3322" ~ "332A",
+    NAICS_code == "3329" ~ "332A",
+    NAICS_code == "3343" ~ "334A",
+    NAICS_code == "3345" ~ "334A",
+    NAICS_code == "3346" ~ "334A",
+    NAICS_code == "3131" ~ "31A",
+    NAICS_code == "3132" ~ "31A",
+    NAICS_code == "3133" ~ "31A",
+    NAICS_code == "3131" ~ "31A",
+    NAICS_code == "3141" ~ "31B",
+    NAICS_code == "3149" ~ "31B",
+    NAICS_code == "3151" ~ "31B",
+    NAICS_code == "3152" ~ "31B",
+    NAICS_code == "3159" ~ "31B",
+    NAICS_code == "3161" ~ "31B",
+    NAICS_code == "3162" ~ "31B",
+    NAICS_code == "3169" ~ "31B",
+    TRUE ~ NAICS_code
+  )) 
+dt_csd
+
+dt_csd_aggregated <- dt_csd %>%
+  group_by(naics_code_new, geo_unique_id) %>% 
+  summarize(VALUE = sum(VALUE, na.rm = TRUE),
+            Total_Employment = sum(Total_Employment, na.rm = TRUE),
+            industry = first(North.American.Industry.Classification.System..NAICS.),
+            .groups = 'drop')
+dt_csd_aggregated$per_employment<-dt_csd_aggregated$VALUE/dt_csd_aggregated$Total_Employment
+dt_csd_aggregated
+summary(dt_csd_aggregated$per_employment)
+dt_csd
+```
+
+next let's make sure we filter it down to only the ones we need
+```{r}
+years <- 2014:2022
+dt_csd_unchanged<-dt_csd
+dt_csd<-dt_csd_aggregated
+dt_csd <- dt_csd%>%
+  crossing(Year = years)
+dt_csd$Year<-as.character(dt_csd$Year)
+trade_exposure
+dt_csd
+dt_csd_exposure <- dt_csd %>%
+  left_join(trade_exposure, by = c("Year"= "year", "naics_code_new"))
+summary(as.factor(dt_csd_exposure$us_expo)) #2616831
+dt_csd_exposure
+
+unmatched_naics <- dt_csd_exposure %>%
+  filter(is.na(us_expo)) %>%
+  distinct(naics_code_new)
+
+matched_naics <- dt_csd_exposure %>%
+  filter(!is.na(us_expo)) 
+unique(matched_naics$naics_code_new)
+unique(trade_exposure$naics_code_new)
+missing_naics <- setdiff(unique(trade_exposure$naics_code_new),(unique(matched_naics$naics_code_new)))
+missing_naics #ok so looks like we need to match this 31A 31B 
+##31A, 31B,332A,334B
+
+```
+
+filter down to only the ones useful
+```{r}
+dt_csd_exposure
+matched_naics
+matched_naics <- matched_naics %>%
+  mutate(weighted_exposure = per_employment * us_expo)
+
+# Step 2: Sum the weighted trade exposure for each CSD and Year
+trade_exposure_by_csd <- matched_naics %>%
+  group_by(geo_unique_id, Year) %>%
+  summarize(Total_Trade_Exposure = sum(weighted_exposure, na.rm = TRUE),
+            Total_Employment=Total_Employment) %>%
+  ungroup()
+trade_exposure_by_csd
+summary(trade_exposure_by_csd$Total_Trade_Exposure)
+```
+
+
+# CD by industry
+```{r}
+dt_cd<-read.csv("CD data employment.csv")
+dt_cd$industry<-dt_cd$Industry...Groups...North.American.Industry.Classification.System..NAICS..2017..428A.
+dt_cd
+dt_cd<-subset(dt_cd,select = c(geo_unique_id,industry,VALUE,NAICS_code))
+total_employment <- dt_cd %>%
+  filter(industry == "Total - Industry - Groups - North American Industry Classification System (NAICS) 2017") %>%
+  group_by(geo_unique_id) %>%
+  summarize(Total_Employment = (VALUE),
+            .groups = 'drop')
+total_employment
+dt_cd <- dt_cd %>%
+  left_join(total_employment, by = "geo_unique_id")
+dt_cd$per_employment<-dt_cd$VALUE/dt_cd$Total_Employment
+dt_cd
+```
+
+
+```{r}
+cd_3121 <- dt_cd %>%
+  filter(str_detect(NAICS_code, "^3121[1A]?")) %>%
+  group_by(geo_unique_id) %>% 
+  summarize(
+    NAICS_code = "3121",
+    VALUE = sum(VALUE, na.rm = TRUE),
+    Total_Employment=sum(Total_Employment,na.rm = T),
+    per_employment = sum(per_employment),
+    industry = industry,
+    .groups = 'drop'
+  )
+cd_3121
+dt_cd
+
+dt_cd$NAICS_code<-as.character(dt_cd$NAICS_code)
+# Step 2: Combine the aggregated row back to the dt_gdp
+dt_cd <- dt_cd %>%
+  bind_rows(cd_3121)
+dt_cd
+```
+
+```{r}
+dt_cd$NAICS_code
+dt_cd <- dt_cd %>%
+  mutate(naics_code_new = case_when(
+    NAICS_code == "3322" ~ "332A",
+    NAICS_code == "3329" ~ "332A",
+    NAICS_code == "3343" ~ "334A",
+    NAICS_code == "3345" ~ "334A",
+    NAICS_code == "3346" ~ "334A",
+    NAICS_code == "3131" ~ "31A",
+    NAICS_code == "3132" ~ "31A",
+    NAICS_code == "3133" ~ "31A",
+    NAICS_code == "3131" ~ "31A",
+    NAICS_code == "3141" ~ "31B",
+    NAICS_code == "3149" ~ "31B",
+    NAICS_code == "3151" ~ "31B",
+    NAICS_code == "3152" ~ "31B",
+    NAICS_code == "3159" ~ "31B",
+    NAICS_code == "3161" ~ "31B",
+    NAICS_code == "3162" ~ "31B",
+    NAICS_code == "3169" ~ "31B",
+    TRUE ~ NAICS_code
+  )) 
+dt_cd
+
+dt_cd_aggregated <- dt_cd %>%
+  group_by(naics_code_new, geo_unique_id) %>% 
+  summarize(VALUE = sum(VALUE, na.rm = TRUE),
+            Total_Employment = sum(Total_Employment, na.rm = TRUE),
+            industry = first(industry),
+            .groups = 'drop')
+dt_cd_aggregated$per_employment<-dt_cd_aggregated$VALUE/dt_cd_aggregated$Total_Employment
+dt_cd_aggregated
+summary(dt_cd_aggregated$per_employment)
+dt_cd
+```
+
+next let's make sure we filter it down to only the ones we need
+```{r}
+years <- 2014:2022
+unique(dt_cd_unchanged$naics_code_new)
+dt_cd_unchanged<-dt_cd
+dt_cd<-dt_cd_aggregated
+dt_cd <- dt_cd%>%
+  crossing(Year = years)
+dt_cd$Year<-as.character(dt_cd$Year)
+trade_exposure$year<-as.character(trade_exposure$year)
+dt_cd
+dt_cd_exposure <- dt_cd %>%
+  left_join(trade_exposure, by = c("Year"= "year", "naics_code_new"))
+summary(as.factor(dt_cd_exposure$us_expo)) #631512NAs
+
+dt_cd_exposure
+
+unmatched_naics <- dt_cd_exposure %>%
+  filter(is.na(us_expo)) %>%
+  distinct(naics_code_new) %>% 
+  filter(str_detect(naics_code_new, "^11")) %>%
+  arrange(desc(naics_code_new))
+unmatched_naics
+unique(dt_cd$naics_code_new)
+
+matched_naics_cd <- dt_cd_exposure %>%
+  filter(!is.na(us_expo))
+matched_naics_cd
+unique(matched_naics_cd$naics_code_new)
+unique(trade_exposure$naics_code_new)
+missing_naics <- setdiff(unique(trade_exposure$naics_code_new),(unique(matched_naics_cd$naics_code_new)))
+missing_naics #ok so looks like we need to match this 31A 31B 
+##31A, 31B,332A,334B
+#how would I miss 112?? wow there's no 112??
+
+```
+
+```{r}
+dt_cd
+matched_naics_cd <- matched_naics_cd %>%
+  mutate(weighted_exposure = per_employment * us_expo)
+matched_naics_cd
+
+# Step 2: Sum the weighted trade exposure for each CSD and Year
+trade_exposure_by_cd <- matched_naics_cd %>%
+  group_by(geo_unique_id, Year) %>%
+  reframe(Total_Trade_Exposure = sum(weighted_exposure, na.rm = TRUE),
+            Total_Employment= first(Total_Employment)) 
+trade_exposure_by_cd
+summary(trade_exposure_by_cd$Total_Trade_Exposure)
+```
+
+
+
+# Matching with survey data
+
+##CSD for 2017
+ok back to the drawing board to see if there's something useful
+```{r}
+for (var in colnames(dt_2017)) {
+  label <- attr(dt_2017[[var]], "label")
+  if (!is.null(label)) {
+    print(paste(var, label))
+  }
+}
+dt_2017$FC8 # How likely is the anti-government populism happening in canada
+##1 is very likely 2 is somewhat likely 3 is not very likley 4 is not at all likely 5 is already happening
+summary(as.factor(dt_2017$FC8))
+
+```
+
+matching
+```{r}
+dt_2017_selected
+dt_2017_selected$CSD<-dt_2017$CSD
+dt_2017_test<-dt_2017_selected
+final_result_try <- trade_exposure_by_csd %>% na.omit()
+
+final_result_2017 <- final_result_try %>%
+  filter(Year == 2017) %>%
+  distinct(geo_unique_id, .keep_all = TRUE)
+
+length(unique(dt_2017_test$CSD)) #561 csdS
+
+# Check overlap
+overlap_count <- sum(dt_2017_test$CSD %in% final_result_try$geo_unique_id)
+print(overlap_count) #1460
+
+
+overlapping_names <- intersect(dt_2017_test$CSD, final_result_try$geo_unique_id)
+length(unique(overlapping_names)) #531 are overalpping out of 561 I guess it's not too bad
+length(final_result_2017$geo_unique_id) # 3306
+
+final_result_2017$geo_unique_id<-as.character(final_result_2017$geo_unique_id)
+merged_2017 <- dt_2017_test %>%
+  left_join(final_result_2017, by = c("CSD"="geo_unique_id"))
+
+merged_2017
+```
+
+ok this just so I can show something
+```{r}
+#since this version is not cleaned
+class(merged_2017$nafta)
+merged_2017$nafta_raw <- merged_2017$nafta
+merged_2017 <- merged_2017 %>%
+  mutate(nafta_pro = case_when(
+    nafta == 1 ~ 1,    # NAFTA is good for the economy
+    nafta == 2 ~ 0,    # NAFTA is not good for the economy
+    nafta == 99 | is.na(nafta) ~ NA_real_,  # Handling '99' and NA values
+    TRUE ~ NA_real_    # Ensuring all other cases are handled as NA
+  ))
+summary(merged_2017$nafta_pro) #what does it mean median is 1 and mean is 0.58 oh cuz median doesn't make sense
+# Check the transformation
+table(merged_2017$nafta_pro, useNA = "ifany") #382 NAs
+merged_2017$per_us_ex<-merged_2017$Total_Trade_Exposure*100
+
+merged_2017$QC<-ifelse(merged_2017$province == 'QC',1,0)
+merged_2017$satisfaction
+merged_2017 <- merged_2017 %>%
+  mutate(econ_sat = case_when(
+    satisfaction == 1 ~ 1,    # NAFTA is good for the economy
+    satisfaction == 2 ~ 0,    # NAFTA is not good for the economy
+    satisfaction == 99 | is.na(nafta) ~ NA_real_,  # Handling '99' and NA values
+    TRUE ~ NA_real_    # Ensuring all other cases are handled as NA
+  ))
+merged_2017 <- merged_2017 %>%
+  mutate(
+    im_econ = as.numeric(im_econ),
+    im_many = as.numeric(im_many),
+    im_ref = as.numeric(im_ref),
+    im_val = as.numeric(im_val)
+  )
+
+merged_2017<- merged_2017 %>%
+  mutate(
+    # Recoding so higher values are more conservative
+    im_econ = case_when(
+      im_econ == 1 ~ 4,    # Strongly agree (liberal view) to Strongly disagree (conservative view)
+      im_econ == 2 ~ 3,    # Agree to Disagree
+      im_econ == 3 ~ 2,    # Disagree to Agree
+      im_econ == 4 ~ 1,    # Strongly disagree to Strongly agree
+      im_econ == 5 ~ 2.5,  # Neutral remains neutral but scaled between agree and disagree
+      im_econ %in% c(99, 6) ~ NA_real_,  # Handling NA and DK
+      TRUE ~ NA_real_
+    ),
+    im_many = recode(im_many, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_),
+    im_ref = recode(im_ref, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_),
+    im_val = recode(im_val, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_)
+  )
+
+merged_2017 <- merged_2017 %>%
+  rowwise() %>%
+  mutate(
+    ideology_index = mean(c( im_many, im_ref, im_val), na.rm = TRUE)
+  )
+summary(merged_2017$ideology_index)
+merged_2017$similar
+reg1 <- glm(nafta_pro ~per_us_ex+QC+income+ideology_index+education+age+gender+similar, family = binomial(link = "logit"), data = merged_2017) # similar is insignificant
+reg2 <- glm(nafta_pro ~QC, family = binomial(link = "logit"), data = merged_2017)
+summary(reg1)
+summary(reg2) # maybe this one year it's not about trade exposure
+stargazer(reg1,type ='text')
+summary(as.factor(merged_2017$QC)) #450 QC respondents
+summary(as.factor(merged_2017$per_us_ex))
+
+test_2017<- merged_2017 %>% filter(QC == 0)
+summary(as.factor(test_2017$trade_expo))
+# for QC: 112 NAs so 229 QC observations
+#for ROC: 424 NAs so 1128 observations
+
+
+plot_model(reg1,show.values = TRUE,
+            p.threshold = c(0.01, 0.05, 0.001),
+           value.offset = .3, 
+           value.size = 3,
+           vline.color = 'black') +
+        labs(title = '',
+             caption = 'note: *p<.05; **p< .01; ***p< .001') +
+        theme(plot.title = element_text(hjust = 0.5)) + theme_bw()
+summary(merged_2017$per_us_ex) # 0.38 to 1
+```
+## CD for 2019
+
+check for 2019 questions
+```{r}
+for (var in colnames(dt_2019)) {
+  label <- attr(dt_2019[[var]], "label")
+  if (!is.null(label)) {
+    print(paste(var, label))
+  }
+}
+# tough there's not much
+```
+
+
+```{r}
+# 2019 was in fall so it makes sense to use the 2019 data
+dt_2019_test <- dt_2019_selected
+dt_2019_test$CD<- dt_2019$CD # put the CD code back
+
+final_result_2019 <- trade_exposure_by_cd %>%
+  filter(Year == 2019)
+final_result_2019
+final_result_2019$geo_unique_id<-as.character(final_result_2019$geo_unique_id)
+length(unique(dt_2019_test$CD)) #230 different census divisions
+
+# Check overlap
+overlap_count <- sum(dt_2019_test$CD %in% final_result_2019$geo_unique_id)
+print(overlap_count) #1996 overlapse (wow that's actually a lot)
+dt_2019_test
+
+merged_2019 <- dt_2019_test %>%
+  left_join(final_result_2019, by = c("CD" = "geo_unique_id"))
+
+summary(merged_2019$Total_Trade_Exposure) #only 12 NAs
+final_result_2019
+```
+
+```{r}
+merged_2019$per_us_ex<-merged_2019$Total_Trade_Exposure*100
+merged_2019 <- merged_2019 %>%
+  mutate(nafta_pro = case_when(
+    nafta == 1 ~ 1,    # NAFTA is good for the economy
+    nafta == 2 ~ 0,    # NAFTA is not good for the economy
+    nafta == 99 | is.na(nafta) ~ NA_real_,  # Handling '99' and NA values
+    TRUE ~ NA_real_    # Ensuring all other cases are handled as NA
+  ))
+
+merged_2019$QC<-ifelse(merged_2019$province == 'QC',1,0)
+
+merged_2019 <- merged_2019 %>%
+  mutate(
+    im_econ = as.numeric(im_econ),
+    im_many = as.numeric(im_many),
+    im_ref = as.numeric(im_ref),
+    im_val = as.numeric(im_val)
+  )
+
+merged_2019<- merged_2019 %>%
+  mutate(
+    # Recoding so higher values are more conservative
+    im_econ = case_when(
+      im_econ == 1 ~ 4,    # Strongly agree (liberal view) to Strongly disagree (conservative view)
+      im_econ == 2 ~ 3,    # Agree to Disagree
+      im_econ == 3 ~ 2,    # Disagree to Agree
+      im_econ == 4 ~ 1,    # Strongly disagree to Strongly agree
+      im_econ == 5 ~ 2.5,  # Neutral remains neutral but scaled between agree and disagree
+      im_econ %in% c(99, 6) ~ NA_real_,  # Handling NA and DK
+      TRUE ~ NA_real_
+    ),
+    im_many = recode(im_many, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_),
+    im_ref = recode(im_ref, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_),
+    im_val = recode(im_val, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_)
+  )
+
+
+merged_2019 <- merged_2019 %>%
+  rowwise() %>%
+  mutate(
+    ideology_index = mean(c( im_many, im_ref, im_val), na.rm = TRUE))
+
+
+reg19_1<-glm(nafta_pro ~per_us_ex*QC+education+income+QC, family = binomial(link = "logit"), data = merged_2019)
+summary(reg19_1)
+
+# very insignificant mhmmmm
+summary(merged_2019$per_us_ex) # ranges from 0.41 to 1
+
+plot_model(reg19_1,type = 'pred',terms = c('per_us_ex','QC')) +
+labs(title = 'Marginal Effect of Being from QC',
+     y = 'Positive view of NAFTA',
+     x = 'Percentage Export to the US' )+
+  theme(plot.title = element_text(hjust = 0.5)) + theme_bw()
+```
+## 2020
+
+```{r}
+for (var in colnames(dt_2020)) {
+  label <- attr(dt_2020[[var]], "label")
+  if (!is.null(label)) {
+    print(paste(var, label))
+  }
+}
+dt_2020$Q3A
+dt_2020$Q3D
+```
+
+```{r}
+# this was also done in fall so it makes sense to 2020 data
+dt_2020_test <- dt_2020_selected
+final_result_2020 <- trade_exposure_by_cd %>%
+  filter(Year == 2020)
+final_result_2020$geo_unique_id<-as.character(final_result_2020$geo_unique_id)
+
+dt_2020_test$CD<-dt_2020$CD
+length(unique(dt_2020_test$CD)) #226 different census divisions
+
+# Check overlap
+overlap_count <- sum(dt_2020_test$CD %in% final_result_2020$geo_unique_id)
+
+print(overlap_count) #1997 overlapse (wow that's actually a lot)
+
+merged_2020 <- dt_2020_test %>%
+  left_join(final_result_2020, by = c("CD" = "geo_unique_id"))
+merged_2020
+
+summary(as.factor(merged_2020$Total_Trade_Exposure)) #only 3 NAs
+
+merged_2020 <- merged_2020 %>%
+  mutate(nafta_pro = case_when(
+    nafta == 1 ~ 1,    # NAFTA is good for the economy
+    nafta == 2 ~ 0,    # NAFTA is not good for the economy
+    nafta == 99 | is.na(nafta) ~ NA_real_,  # Handling '99' and NA values
+    TRUE ~ NA_real_    # Ensuring all other cases are handled as NA
+  ))
+
+merged_2020$QC<-ifelse(merged_2020$province == 'QC',1,0)
+
+merged_2020 <- merged_2020 %>%
+  mutate(
+    im_econ = as.numeric(im_econ),
+    im_many = as.numeric(im_many),
+    im_ref = as.numeric(im_ref),
+    im_val = as.numeric(im_val)
+  )
+
+merged_2020<- merged_2020 %>%
+  mutate(
+    # Recoding so higher values are more conservative
+    im_econ = case_when(
+      im_econ == 1 ~ 4,    # Strongly agree (liberal view) to Strongly disagree (conservative view)
+      im_econ == 2 ~ 3,    # Agree to Disagree
+      im_econ == 3 ~ 2,    # Disagree to Agree
+      im_econ == 4 ~ 1,    # Strongly disagree to Strongly agree
+      im_econ == 5 ~ 2.5,  # Neutral remains neutral but scaled between agree and disagree
+      im_econ %in% c(99, 6) ~ NA_real_,  # Handling NA and DK
+      TRUE ~ NA_real_
+    ),
+    im_many = recode(im_many, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_),
+    im_ref = recode(im_ref, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_),
+    im_val = recode(im_val, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_)
+  )
+
+
+merged_2020 <- merged_2020 %>%
+  rowwise() %>%
+  mutate(
+    ideology_index = mean(c( im_many, im_ref, im_val), na.rm = TRUE))
+
+merged_2020$per_us_ex<-merged_2020$Total_Trade_Exposure*100
+reg20_1<-glm(nafta_pro ~per_us_ex*QC+gender+age+income, family = binomial(link = "logit"), data = merged_2020)
+summary(reg20_1)
+# negative
+```
+## 2022
+
+```{r}
+for (var in colnames(dt_2022)) {
+  label <- attr(dt_2022[[var]], "label")
+  if (!is.null(label)) {
+    print(paste(var, label))
+  }
+}
+dt_2022$Q13A # canada and the US should unite into one country
+summary(as.factor(dt_2022$Q13A))
+dt_2022$Q11
+```
+
+```{r}
+# this was also done in fall so it makes sense to 2020 data
+dt_2022_test <- dt_2022_selected
+final_result_2022 <- trade_exposure_by_cd %>%
+  filter(Year == 2022)
+final_result_2022$geo_unique_id<-as.character(final_result_2022$geo_unique_id)
+
+dt_2022_test$CD<-dt_2022$CD
+length(unique(dt_2022_test$CD)) #220 different census divisions
+
+# Check overlap
+overlap_count <- sum(dt_2022_test$CD %in% final_result_2022$geo_unique_id)
+
+print(overlap_count) #1990 overlapse (wow that's actually a lot)
+
+merged_2022 <- dt_2022_test %>%
+  left_join(final_result_2022, by = c("CD" = "geo_unique_id"))
+merged_2022
+
+summary(as.factor(merged_2022$Total_Trade_Exposure)) #only 10 NAs
+
+merged_2022 <- merged_2022 %>%
+  mutate(nafta_pro = case_when(
+    nafta == 1 ~ 1,    # NAFTA is good for the economy
+    nafta == 2 ~ 0,    # NAFTA is not good for the economy
+    nafta == 99 | is.na(nafta) ~ NA_real_,  # Handling '99' and NA values
+    TRUE ~ NA_real_    # Ensuring all other cases are handled as NA
+  ))
+
+merged_2022$QC<-ifelse(merged_2022$province == 'QC',1,0)
+
+merged_2022 <- merged_2022 %>%
+  mutate(
+    im_econ = as.numeric(im_econ),
+    im_many = as.numeric(im_many),
+    im_ref = as.numeric(im_ref),
+    im_val = as.numeric(im_val)
+  )
+length(dt_2022$QUEST)
+length(merged_2022$CD)
+merged_2022$general_nafta<-dt_2022$Q11
+class(merged_2022$general_nafta)
+merged_2022$general_nafta<-as.character(merged_2022$general_nafta)
+
+summary(as.factor(merged_2022$general_nafta))
+merged_2022 <- merged_2022 %>%
+  mutate(general_nafta = case_when(
+    general_nafta == 1 ~ 1,    
+    general_nafta == 2 ~ 2,    
+    general_nafta == 99 | is.na(nafta) ~ NA_real_,  # Handling '99' and NA values
+    TRUE ~ NA_real_    # Ensuring all other cases are handled as NA
+  ))
+
+merged_2022<- merged_2022 %>%
+  mutate(
+    # Recoding so higher values are more conservative
+    im_econ = case_when(
+      im_econ == 1 ~ 4,    # Strongly agree (liberal view) to Strongly disagree (conservative view)
+      im_econ == 2 ~ 3,    # Agree to Disagree
+      im_econ == 3 ~ 2,    # Disagree to Agree
+      im_econ == 4 ~ 1,    # Strongly disagree to Strongly agree
+      im_econ == 5 ~ 2.5,  # Neutral remains neutral but scaled between agree and disagree
+      im_econ %in% c(99, 6) ~ NA_real_,  # Handling NA and DK
+      TRUE ~ NA_real_
+    ),
+    im_many = recode(im_many, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_),
+    im_ref = recode(im_ref, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_),
+    im_val = recode(im_val, `1` = 4, `2` = 3, `3` = 2, `4` = 1, `5` = 2.5, `99` = NA_real_, `6` = NA_real_)
+  )
+
+
+merged_2022 <- merged_2022 %>%
+  rowwise() %>%
+  mutate(
+    ideology_index = mean(c( im_many, im_ref, im_val), na.rm = TRUE))
+merged_2022$per_us_ex<-merged_2022$Total_Trade_Exposure*100
+reg22_1<-glm(nafta_pro ~QC*per_us_ex, family = binomial(link = "logit"), data = merged_2022)
+summary(reg22_1)
+
+plot_model(reg22_1,type = 'pred',terms = c('per_us_ex','QC')) +
+labs(title = 'Marginal Effect of Being from QC',
+     y = 'Positive view of NAFTA',
+     x = 'Percentage Export to the US' )+
+  theme(plot.title = element_text(hjust = 0.5)) + theme_bw()
+# negative
+```
+# exmaine the four years together
+before merging let's check out the four dataset
+```{r}
+colnames(merged_2017)
+colnames(merged_2019)
+colnames(merged_2020)
+colnames(merged_2022)
+summary(as.factor(dt_2020$Q11)) # this is on the question of trump vs. biden
+merged_data <- bind_rows(merged_2017, merged_2019, merged_2020, merged_2022)
+merged_data
+summary(as.factor(merged_data$party))
+merged_data <- merged_data %>%
+  mutate(economic_left_right = case_when(
+    party %in% c("The Conservative Party", "The Peoples Party of Canada") ~ 3,
+    party %in% c("The Liberal Party", "The Bloc Québécois") ~ 2,
+    party %in% c("The New Democratic Party", "Green Party of Canada") ~ 1,
+    party %in% c("Undecided/Too early to say", "DK/NA", "Refused to answer", "UNDECIDED/TOO EARLY TO SAY", "REFUSED TO ANSWER", "Not eligible to vote", "Other", "Other (DO NOT SPECIFY)", NA) ~ NA_real_
+  ))
+summary(merged_data$economic_left_right) #3008 NAs probably because some years
+```
+
+
+ok let'srun some tests
+```{r}
+merged_data$year<-as.factor(merged_data$year)
+merged_data$year <- relevel(merged_data$year, ref = "2020")
+merged_data$province <- as.factor(merged_data$province)
+merged_data$province <- relevel(merged_data$province, ref = "ON")
+class(merged_data$province)
+reg_1<-glm(nafta_pro ~per_us_ex+gender+year+income+education+age+ideology_index+QC, family = binomial(link = "logit"), data = merged_data)
+reg_1<-glm(nafta_pro ~QC*year, family = binomial(link = "logit"), data = merged_data)
+reg_3<-glm(nafta_pro ~province*year+age+gender, family = binomial(link = "logit"), data = merged_data)
+summary(reg_1)
+summary(merged_data$gender) # i think it's actually fairly balanced lol
+summary(as.factor(merged_data$age))
+```
+## comparing models
+```{r}
+library(lme4)
+
+reg_mixed <- glmer(nafta_pro ~ per_us_ex * ideology_index + gender + income + education + age + satisfaction + province + (1 | year), 
+                   family = binomial(link = "logit"), data = merged_data)
+summary(reg_mixed)
+
+# Fixed effects model
+reg_fixed <- glm(nafta_pro ~ per_us_ex * year * ideology_index + gender + income + education + age + province, 
+                 family = binomial(link = "logit"), data = merged_data)
+summary(reg_fixed)
+
+
+# Compare AIC
+AIC(reg_fixed, reg_mixed)
+# ok so let's go for fixed effect
+summary(reg_fixed)
+
+```
+let's do a proper one with robustness check and evertyhing
+```{r}
+reg_1<-glm(nafta_pro ~per_us_ex*ideology_index+gender+age+education+income+QC+year, family = binomial(link = "logit"), data = merged_data)
+reg1 <- glm(nafta_pro ~ province, family = binomial(link = "logit"), data = merged_data)
+summary(reg_mixed_1)
+
+
+reg_mixed_1 <- glmer(nafta_pro ~ per_us_ex+ income+ gender+education+age+(1 | year), 
+                   family = binomial(link = "logit"), data = merged_data)
+summary(reg_mixed_2)
+reg_mixed_2 <- glmer(nafta_pro ~ per_us_ex+economic_left_right+education+(1 | year), 
+                   family = binomial(link = "logit"), data = merged_data)
+reg_mixed_3 <- glmer(nafta_pro ~ per_us_ex+economic_left_right+ideology_index+(1 | year), 
+                   family = binomial(link = "logit"), data = merged_data)
+reg_mixed_4 <- glmer(nafta_pro ~ per_us_ex + ideology_index + economic_left_right+gender +  education + age  + (1 | year), 
+                   family = binomial(link = "logit"), data = merged_data)
+reg_mixed_5 <- glmer(nafta_pro ~ per_us_ex +ideology_index + gender + income + education + age + satisfaction + (1 | year), 
+                   family = binomial(link = "logit"), data = merged_data)
+stargazer(reg_mixed_1,reg_mixed_2,reg_mixed_3,reg_mixed_4,reg_mixed_5,type = 'text')
+
+library(car)
+vif_model <- glm(nafta_pro ~ per_us_ex + economic_left_right + ideology_index, data = merged_data, family = binomial)
+vif(vif_model)
+# 1 = satisfied
+plot_model(reg_mixed_1,type = 'pred',terms = c('per_us_ex','QC')) +
+labs(title = 'Marginal Effect of Being from QC',
+     y = 'Positive view of NAFTA',
+     x = 'Percentage Export to the US' )+
+  theme(plot.title = element_text(hjust = 0.5)) + theme_bw()
+```
+let's do a quebec subset
+```{r}
+# Subset the data for Quebec
+quebec_data <- merged_data %>% filter(province == "QC")
+summary(merged_data$province)
+
+# Run a mixed effects model on the Quebec subset
+reg_qc <- glmer(nafta_pro ~  per_us_ex +ideology_index + gender + income + education + age + satisfaction+ (1 | year), 
+                family = binomial(link = "logit"), 
+                data = quebec_data)
+
+# Summary of the model
+summary(reg_qc)
+
+```
+
+```{r}
+# Mixed-effects model with interaction between QC and year
+model_interaction_year <- glmer(nafta_pro ~ per_us_ex + ideology_index + gender + income + education + age + satisfaction + QC * year + (1 | year),
+                                family = binomial(link = "logit"), data = merged_data)
+
+# Summary of the model
+summary(model_interaction_year)
+
+```
