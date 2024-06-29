@@ -1,0 +1,783 @@
+---
+title: "scraping"
+author: "Diya Jiang"
+date: "2024-02-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+library(httr)
+library(rvest)
+library(stringr)
+#install.packages('pdftools')
+library(pdftools)
+```
+
+# statement and official releases
+## from 2021 onwards
+```{r}
+#ok let's try with just a link
+link <- "https://www.whitehouse.gov/briefing-room/statements-releases/page/516/"
+
+WH_page <-read_html(link)
+WH_page
+WH_page %>% html_elements(css = ".news-item__title")
+```
+
+```{r}
+# Function to scrape titles, dates, and categories from a single page
+scrape_details <- function(page_number) {
+  base_url <- "https://www.whitehouse.gov/briefing-room/page/"
+  url <- paste0(base_url, page_number, "/")
+  
+  page <- read_html(GET(url))
+  
+  titles <- page %>%
+    html_nodes(".news-item__title") %>%
+    html_text(trim = TRUE)
+  
+  dates <- page %>%
+    html_nodes("time") %>%
+    html_attr("datetime")
+  
+  # Extract the category using the updated class
+  categories <- page %>%
+    html_nodes(".cat-links") %>%
+    html_text(trim = TRUE)
+  
+    links<- page %>% 
+    html_nodes(".news-item__title") %>%
+    html_attr("href")
+    
+  data <- data.frame(date = dates, title = titles, category = categories, link = links, stringsAsFactors = FALSE)
+  
+  return(data)
+}
+
+# Initialize an empty data frame to store results
+results <- data.frame(date = character(), title = character(), category = character(),link = character(), stringsAsFactors = FALSE)
+
+# Set the range of pages you want to scrape
+start_page <- 1
+end_page <- 5
+
+# Loop through the specified range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  results <- rbind(results, page_data)
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+head(results)
+
+# View the results
+print(head(results))
+start_page <- 701
+end_page <- 957
+
+# Loop through the new range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  results <- rbind(results, page_data) # Appends the new data to the existing results
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+
+head(results)
+```
+
+### ok after I filter it down I can start to scrap the actual content
+first let's do just speechs and remarks
+```{r}
+unique(results$category)
+speech<- subset(results, category=="Speeches and Remarks" )
+```
+
+I don't want to break the link or be flagged as suspicious so Let me break it down
+```{r}
+
+# Function to scrape the content from a speech URL
+scrape_speech_content <- function(url) {
+  page <- read_html(url)
+  # Assuming the content is within a div with a class that includes 'body-content'
+  content <- page %>%
+    html_nodes(".body-content p") %>%
+    html_text() %>%
+    paste(collapse = " ") 
+  return(content)
+}
+
+
+if("content" %in% names(speech)) {
+  start_index <- max(which(!is.na(speech$content))) + 1
+} else {
+  speech$content <- NA
+  start_index <- 1
+}
+
+end_index <- 2037
+
+
+
+## end_index <- min(end_index, nrow(speech)) # Adjust if end_index exceeds number of rows
+
+# Loop through the new batch of links and scrape the content
+for (i in start_index:end_index) {
+  # Scrape the content from the URL
+  speech$content[i] <- scrape_speech_content(speech$link[i])
+  Sys.sleep(3) # Be polite and don't overload the server
+  print(paste("Scraped page", i))
+}
+
+speech$content[601]
+
+write.csv(speech,file = 'Bidenspeech.csv')
+
+```
+
+
+### let's do department of state
+first 
+```{r}
+# Function to scrape titles, dates, and categories from a single page
+scrape_details <- function(page_number) {
+  base_url <- "https://www.state.gov/press-releases/page/"
+  url <- paste0(base_url, page_number, "/")
+  
+  page <- read_html(GET(url))
+  
+  titles <- page %>%
+    html_nodes(".collection-result__link") %>%
+    html_text(trim = TRUE)
+  
+  categories <- page %>%
+    html_nodes("p.collection-result__date") %>%
+    html_text(trim = TRUE)
+  
+  links <- page %>%
+    html_nodes(".collection-result__link") %>%
+    html_attr("href")
+    
+  data <- data.frame( title = titles, link = links,category = categories, stringsAsFactors = FALSE)
+  
+  return(data)
+}
+
+# Initialize an empty data frame to store results
+dos <- data.frame(category = character(), title = character(),link = character(), stringsAsFactors = FALSE)
+
+# Set the range of pages you want to scrape
+start_page <- 1
+end_page <- 5
+
+# Loop through the specified range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  dos <- rbind(dos, page_data)
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+head(dos)
+
+# View the results
+print(head(dos))
+start_page <- 791 #i did 620 twice
+end_page <- 850
+
+# Loop through the new range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  dos <- rbind(dos, page_data) # Appends the new data to the existing results
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+
+# notice to the press is not really needed
+# read outs can probably also be ignored
+# they don't have department briefing
+
+summary(as.factor(dos$category))
+head(dos)
+
+write.csv(dos, "Press Briefing links.csv")
+```
+
+press briefing now
+```{r}
+scrape_details <- function(page_number) {
+  base_url <- "https://www.state.gov/department-press-briefings/page/"
+  url <- paste0(base_url, page_number, "/")
+  
+  page <- read_html(GET(url))
+  
+  titles <- page %>%
+    html_nodes(".collection-result__link") %>%
+    html_text(trim = TRUE)
+  
+  categories <- page %>%
+    html_nodes("p.collection-result__date") %>%
+    html_text(trim = TRUE)
+  
+  links <- page %>%
+    html_nodes(".collection-result__link") %>%
+    html_attr("href")
+    
+  data <- data.frame( title = titles, link = links,category = categories, stringsAsFactors = FALSE)
+  
+  return(data)
+}
+
+# Initialize an empty data frame to store results
+dos_briefing <- data.frame(category = character(), title = character(),link = character(), stringsAsFactors = FALSE)
+
+# Set the range of pages you want to scrape
+start_page <- 1
+end_page <- 2
+
+# Loop through the specified range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  dos_briefing <- rbind(dos_briefing, page_data)
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+head(dos_briefing)
+
+# View the results
+print(head(dos))
+start_page <- 3 #i did 620 twice
+end_page <- 84
+
+# Loop through the new range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  dos_briefing <- rbind(dos_briefing, page_data) # Appends the new data to the existing results
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+
+# Set the range of pages you want to scrape
+start_page <- 1
+end_page <- 2
+
+# Loop through the specified range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  dos_briefing <- rbind(dos_briefing, page_data)
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+head(dos_briefing)
+
+# View the results
+print(head(dos))
+start_page <- 3 #i did 620 twice
+end_page <- 84
+
+# Loop through the new range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  dos_briefing <- rbind(dos_briefing, page_data) # Appends the new data to the existing results
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+
+write.csv(dos_briefing, "briefing only links.csv")
+
+```
+
+let's start scraping for the press briefings
+```{r}
+dos_briefing<-read.csv("briefing only links.csv")
+
+# Function to scrape the content from a speech URL
+scrape_speech_content <- function(url) {
+  webpage <- read_html(url)
+  
+  dates <- tryCatch({
+    webpage %>% html_element('.article-meta__publish-date') %>% html_text(trim = TRUE)
+  }, error = function(e) { NA })  # Return NA if an error occurs (e.g., element not found)
+  
+  
+  spokespersons <- webpage %>%
+    html_element('.article-meta__author-bureau') %>%
+    html_text(trim = TRUE)
+  
+  contents <- webpage %>%
+    html_elements('.entry-content p') %>%
+    html_text() %>% 
+    paste(collapse = "\n") %>% 
+    tryCatch(error = function(e) { NA })
+  
+  list(date = dates, spokesperson = spokespersons, content = contents)
+  
+}
+
+
+if("content" %in% names(dos_briefing)) {
+  start_index <- max(which(!is.na(dos_briefing$content))) + 1
+} else {
+  dos_briefing$content <- NA
+  start_index <- 1
+}
+start_index<-684
+end_index <- 840
+
+## end_index <- min(end_index, nrow(speech)) # Adjust if end_index exceeds number of rows
+
+# Loop through the new batch of links and scrape the content
+for (i in start_index:end_index) {
+  scraped_data <- scrape_speech_content(dos_briefing$link[i])
+  # Update the dos_briefing data frame with the new data
+  dos_briefing$date[i] <- scraped_data$date
+  dos_briefing$spokesperson[i] <- scraped_data$spokesperson
+  dos_briefing$content[i] <- scraped_data$content
+  # Polite pause and status printout
+  Sys.sleep(3)
+  print(paste("Scraped page", i))
+}
+dos_briefing$content[501]
+dos_briefing2<-dos_briefing
+dos_briefing2$content <- sapply(dos_briefing$content, as.character) # here I'm just converting the list into characters
+saveRDS(dos_briefing,'dos_briefing.rds') # i should save it in case i do something stupid again lol
+
+```
+
+ok let us look at the archive ones
+```{r}
+# Function to scrape titles, dates, and categories from a single page
+scrape_details <- function(page_number) {
+  base_url <- "https://2017-2021.state.gov/department-press-briefings/page/"
+  url <- paste0(base_url, page_number, "/")
+  
+  page <- read_html(GET(url))
+  
+  titles <- page %>%
+    html_nodes(".collection-result__link") %>%
+    html_text(trim = TRUE)
+  
+  categories <- page %>%
+    html_nodes("p.collection-result__date") %>%
+    html_text(trim = TRUE)
+  
+  links <- page %>%
+    html_nodes(".collection-result__link") %>%
+    html_attr("href")
+    
+  data <- data.frame( title = titles, link = links,category = categories, stringsAsFactors = FALSE)
+  
+  return(data)
+}
+
+# Initialize an empty data frame to store results
+dos_briefing_17 <- data.frame(category = character(), title = character(),link = character(), stringsAsFactors = FALSE)
+
+# Set the range of pages you want to scrape
+start_page <- 2 #I'm missing the first page because it's different
+end_page <- 100
+
+# Loop through the specified range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  dos_briefing_17 <- rbind(dos_briefing_17, page_data)
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+
+page <- read_html(GET("https://2017-2021.state.gov/department-press-briefings"))
+  
+titles <- page %>%
+  html_nodes(".collection-result__link") %>%
+  html_text(trim = TRUE)
+  
+  categories <- page %>%
+    html_nodes("p.collection-result__date") %>%
+    html_text(trim = TRUE)
+  
+  links <- page %>%
+    html_nodes(".collection-result__link") %>%
+    html_attr("href")
+    
+data <- data.frame( title = titles, link = links,category = categories, stringsAsFactors = FALSE)
+
+dos_briefing_17<-rbind(dos_briefing_17,data)
+
+```
+
+
+moving on, let's scrape themmmm
+```{r}
+# Function to scrape the content from a speech URL
+scrape_speech_content <- function(url) {
+  webpage <- read_html(url)
+  
+  dates <- tryCatch({
+    webpage %>% html_element('.article-meta__publish-date') %>% html_text(trim = TRUE)
+  }, error = function(e) { NA })  # Return NA if an error occurs (e.g., element not found)
+  
+  
+  spokespersons <- webpage %>%
+    html_element('.article-meta__author-bureau') %>%
+    html_text(trim = TRUE)
+  
+  contents <- webpage %>%
+    html_elements('.entry-content p') %>%
+    html_text() %>% 
+    paste(collapse = "\n") %>% 
+    tryCatch(error = function(e) { NA })
+  
+  list(date = dates, spokesperson = spokespersons, content = contents)
+  
+}
+
+
+if("content" %in% names(dos_briefing_17)) {
+  start_index <- max(which(!is.na(dos_briefing_17$content))) + 1
+} else {
+  dos_briefing_17$content <- NA
+  start_index <- 1
+}
+start_index
+end_index <- start_index+199
+
+## end_index <- min(end_index, nrow(speech)) # Adjust if end_index exceeds number of rows
+
+# Loop through the new batch of links and scrape the content
+for (i in start_index:end_index) {
+  scraped_data <- scrape_speech_content(dos_briefing_17$link[i])
+  # Update the dos_briefing data frame with the new data
+  dos_briefing_17$date[i] <- scraped_data$date
+  dos_briefing_17$spokesperson[i] <- scraped_data$spokesperson
+  dos_briefing_17$content[i] <- scraped_data$content
+  # Polite pause and status printout
+  Sys.sleep(3)
+  print(paste("Scraped page", i))
+}
+saveRDS(dos_briefing_17)
+```
+combine the two
+```{r}
+head(dos_briefing2)
+head(dos_briefing_17)
+class(dos_briefing2$content)
+dos_briefing2 <- dos_briefing2 %>% 
+  select(-X) 
+dos_briefing_full<- rbind(dos_briefing2,dos_briefing_17)
+view(dos_briefing_full)
+saveRDS(dos_briefing_full,'dos_briefing_17to23.rds')
+```
+
+ok now turns out maybe I also want the obama years
+first just the daily breifings (note that there's also special briefings)
+```{r}
+
+# Function to scrape titles, dates, and categories from a single page
+scrape_details <- function(year,month) {
+  base_url <- "https://2009-2017.state.gov/r/pa/prs/dpb/"
+  #month_formatted <- sprintf("%02d", month)
+  url <- paste0(base_url, year, "/", month)
+  
+  page <- read_html(GET(url))
+
+  links <- page %>%
+    html_nodes(".read") %>%
+    html_attr("href")
+    
+  data <- data.frame(link = links, stringsAsFactors = FALSE)
+  
+  return(data)
+}
+
+# Initialize an empty data frame to store results
+obama <- data.frame(link = character(), stringsAsFactors = FALSE)
+
+# Loop through the years and months of the second term
+for(year in 2010:2016) {
+  for(month in 1:12) {
+    page_data <- scrape_details(year, month)
+    obama <- rbind(obama, page_data)
+    Sys.sleep(1)  # Polite sleep between requests
+    print(paste("Scraped", month, year))  # Print the status message
+  }
+}
+
+## now let's do 2019 whose format is completely fucked lol
+##jan, jun, july, aug, sept, oct,nov, dec; the rest are in numbers
+
+for(year in 2009:2009) {
+  for(month in 2:5) {
+    page_data <- scrape_details(year, month)
+    obama <- rbind(obama, page_data)
+    Sys.sleep(1)  # Polite sleep between requests
+    print(paste("Scraped", month, year))  # Print the status message
+  }
+}
+
+# now do the lettered ones
+months_2009<-c('jan','jun','july','aug','sept','oct','nov','dec')
+for(year in 2009:2009) {
+  for(month in months_2009) {
+    page_data <- scrape_details(year, month)
+    obama <- rbind(obama, page_data)
+    Sys.sleep(1)  # Polite sleep between requests
+    print(paste("Scraped", month, year))  # Print the status message
+  }
+}
+obama$category<- 'Daily Briefings'
+```
+
+let's scrape through the daily briefing
+```{r}
+scrape_speech_content <- function(url) {
+  webpage <- read_html(url)
+  
+  dates <- webpage %>% 
+    html_node('#date_long') %>% html_text(trim = TRUE)
+  
+  spokespersons <- webpage %>%
+    html_element('.officials-name') %>%
+    html_text(trim = TRUE)
+  
+  contents <- webpage %>%
+    html_elements('#centerblock') %>%
+    html_text() %>% 
+    paste(collapse = "\n") %>% 
+    tryCatch(error = function(e) { NA })
+  
+  list(date = dates, spokesperson = spokespersons, content = contents)
+  
+}
+obama$link[1]
+obama$link_new<-paste0('https:',obama$link)
+obama$link_new[4]
+
+if("content" %in% names(obama)) {
+  start_index <- max(which(!is.na(obama$content))) + 1
+} else {
+  obama$content <- NA
+  start_index <- 1
+}
+start_index
+
+end_index <- start_index+99
+end_index
+
+
+# Loop through the new batch of links and scrape the content
+for (i in start_index:end_index) {
+  scraped_data <- scrape_speech_content(obama$link_new[i])
+  # Update the dos_briefing data frame with the new data
+  obama$date[i] <- scraped_data$date
+  obama$content[i] <- scraped_data$content
+  # Polite pause and status printout
+  Sys.sleep(4)
+  print(paste("Scraped article #", i))
+}
+
+obama$date[250]
+#need to look at 188 and 250
+```
+
+
+moving on to include the special briefings to the list
+```{r}
+scrape_details <- function(year) {
+  base_url <- "https://2009-2017.state.gov/r/pa/prs/sb/"
+  url <- paste0(base_url, year)
+  
+  page <- read_html(GET(url))
+
+  links <- page %>%
+    html_nodes('p > a') %>%
+    html_attr('href')
+    
+  data <- data.frame(link = links, stringsAsFactors = FALSE)
+  
+  return(data)
+}
+
+obama_s <- data.frame(link = character(), stringsAsFactors = FALSE)
+for(year in 2009:2016) {
+    page_data <- scrape_details(year)
+    obama_s <- rbind(obama_s, page_data)
+    Sys.sleep(1)  # Polite sleep between requests
+    print(paste("Scraped", year))  # Print the status message
+}
+
+head(obama_s)
+obama_s<-remove_missing(obama_s)
+obama_s$link<-paste0('https://2009-2017.state.gov',obama_s$link)
+#obama_s<-obama_s %>% select(-link_try)
+#obama_s$link<-obama_s$link_try
+```
+ok let's try scraping these special briefings first cuz there's not a lot
+
+```{r}
+scrape_speech_content <- function(url) {
+  webpage <- read_html(url)
+  
+  dates <- webpage %>% 
+    html_node('#date_long') %>% html_text(trim = TRUE)
+  
+  spokespersons <- webpage %>%
+    html_element('.officials-name') %>%
+    html_text(trim = TRUE)
+  
+  contents <- webpage %>%
+    html_elements('#centerblock') %>%
+    html_text() %>% 
+    paste(collapse = "\n") %>% 
+    tryCatch(error = function(e) { NA })
+  
+  list(date = dates, spokesperson = spokespersons, content = contents)
+  
+}
+
+
+if("content" %in% names(obama_s)) {
+  start_index <- max(which(!is.na(obama_s$content))) + 1
+} else {
+  obama_s$content <- NA
+  start_index <- 1
+}
+start_index
+end_index <- start_index+99
+
+
+# Loop through the new batch of links and scrape the content
+for (i in start_index:end_index) {
+  scraped_data <- scrape_speech_content(obama_s$link[i])
+  # Update the dos_briefing data frame with the new data
+  obama_s$date[i] <- scraped_data$date
+  obama_s$spokesperson[i] <- scraped_data$spokesperson
+  obama_s$content[i] <- scraped_data$content
+  # Polite pause and status printout
+  Sys.sleep(3)
+  print(paste("Scraped article#", i))
+}
+## ugh I always do something stupid and have to redo the wholething I'm so dumb ughhhhhhhhhhh
+obama_s$content[87]
+obama_s$link[87]
+
+obama_s$cleaned_link[883]
+obama_s$link[883]
+#85 is when I realized that some of them are partial url and some are not
+clean_url <- function(url) {
+  # Define the repeated pattern that you want to detect and remove
+  base_url_pattern <- "https://2009-2017\\.state\\.gov"
+  
+  # Create a regex pattern to detect the repeated occurrence
+  pattern <- paste0("(^", base_url_pattern, ")(http://2009-2017\\.state\\.gov)")
+  
+  # Use sub to remove the repeated base URL if it exists
+  cleaned_url <- sub(pattern, "\\2", url)
+  
+  return(cleaned_url)
+}
+obama_s$cleaned_link<-sapply(obama_s$link,clean_url)
+
+for(i in seq_along(obama_s$cleaned_link)) {
+  # Check if the link contains the repeated pattern
+  if(grepl("https://2009-2017.state.govhttp:", obama_s$cleaned_link[i])) {
+    # Replace the incorrect part of the link with the correct base URL
+    obama_s$cleaned_link[i] <-sub("^https://2009-2017.state.gov", "", obama_s$cleaned_link[i])
+  }
+}
+
+start_index
+start_index<-684
+end_index <- start_index+199
+
+## end_index <- min(end_index, nrow(speech)) # Adjust if end_index exceeds number of rows
+
+# Loop through the new batch of links and scrape the content
+for (i in start_index:end_index) {
+  scraped_data <- scrape_speech_content(obama_s$cleaned_link[i])
+  # Update the dos_briefing data frame with the new data
+  obama_s$date[i] <- scraped_data$date
+  obama_s$spokesperson[i] <- scraped_data$spokesperson
+  obama_s$content[i] <- scraped_data$content
+  # Polite pause and status printout
+  Sys.sleep(2)
+  print(paste("Scraped article#", i))
+}
+
+end_index
+
+#87 has a warning
+dos_briefing2$content <- sapply(dos_briefing$content, as.character) # here I'm just converting the list into characters
+saveRDS(obama_s,'obama_specialb.rds') # i should save it in case i do something stupid again lol
+```
+
+
+
+
+
+# Trump's Administration
+```{r}
+# Function to scrape titles, dates, and categories from a single page
+scrape_details <- function(page_number) {
+  base_url <- "https://trumpwhitehouse.archives.gov/briefings-statements/page/"
+  url <- paste0(base_url, page_number, "/")
+  
+  page <- read_html(GET(url))
+  
+  titles <- page %>%
+    html_nodes(".briefing-statement__title") %>%
+    html_text(trim = TRUE)
+  
+  links<- page %>% 
+    html_nodes(".briefing-statement__title") %>%
+    html_node("a") %>% 
+    html_attr("href")
+  
+  dates <- page %>%
+    html_nodes("time") %>%
+    html_attr("datetime")
+  
+  
+  data <- data.frame(date = dates, title = titles, link = links, stringsAsFactors = FALSE)
+  
+  return(data)
+}
+
+# Initialize an empty data frame to store results
+briefings <- data.frame(date = character(), title = character(), links = character(),stringsAsFactors = FALSE)
+
+# Set the range of pages you want to scrape
+start_page <- 1
+end_page <- 5
+
+# Loop through the specified range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  briefings <- rbind(briefings, page_data)
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+head(briefings)
+########################################################
+# View the results
+
+start_page <- 6
+end_page <- 200
+
+# Loop through the new range of pages
+for(i in start_page:end_page) {
+  page_data <- scrape_details(i)
+  briefings <- rbind(briefings, page_data) # Appends the new data to the existing results
+  Sys.sleep(1) # Polite sleep between requests
+  print(paste("Scraped page", i)) # Print the status message
+}
+
+
+```
+
+## Trump Administration
+
