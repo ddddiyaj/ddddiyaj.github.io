@@ -1,0 +1,2521 @@
+---
+title: "analysis"
+author: "Diya Jiang"
+date: "2024-02-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(stringr)
+library(ggeasy)
+library(tm)
+#install.packages('text')
+library(quanteda)
+library(tidytext)
+library(text)
+#install.packages("textstem")
+library(textstem)
+library(wordcloud)
+library(wordcloud2)
+library(reshape2)
+library(ldatuning)
+library(topicmodels)
+library(syuzhet)
+library(igraph)
+library(ggraph)
+```
+# Codebook (ish)
+
+1. obama_full: it's all press briefings in the obama era
+2. dos_briefing_full: contains all briefings post obama era( Trump + Biden)
+
+first import the data
+```{r}
+dos_briefing_full<-readRDS("dos_briefing_17to23.rds")
+summary(as.factor(dos_briefing_full$category))
+# can we get rid of remarks to the press?
+```
+
+# Priliminary
+let's do some preliminary analysis on text including china
+```{r}
+china_pattern <- "\\b(China|china|Chinese|chinese|PRC|Beijing|beijing|President Xi|Xi Jinping)\\b"
+
+dos_briefing_full$China<- str_detect(dos_briefing_full$content, china_pattern)
+summary(dos_briefing_full$China)
+
+dos_briefing_full$date<-as.Date(dos_briefing_full$date, format = "%B %d, %Y")
+
+###let's maybe aggregate this by month
+dos_briefing_full$month_year <- format(dos_briefing_full$date, "%Y-%m")
+
+# Group by this new column and count the mentions
+mentions_by_month <- dos_briefing_full %>%
+  group_by(month_year) %>%
+  summarise(
+    mentions = sum(China, na.rm = TRUE),
+    total = n(),
+    percent = mentions / total * 100  # Calculate percentage
+  ) %>%
+  mutate(month_year = as.Date(paste0(month_year, "-01"))) 
+
+# Plot the trend of mentions by month
+ggplot(mentions_by_month, aes(x = month_year, y = percent)) +
+  geom_col(fill = "grey25") +
+  scale_x_date(date_breaks = "6 months", date_labels = "%b %Y") +
+  theme_minimal() +
+  labs(
+    title = "Percentage of Briefings Mentioning China by Month",
+    x = "Month-Year",
+    y = "Percentage of Mentions"
+  ) +theme_minimal()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+let's look just talk of supply chain and trade
+```{r}
+
+#let's look at just the actual terms first
+deglobalization <- "\\b(derisking|de-risking|friendshoring|decoupling|shoring|diversification|diversify|supply chain|resilience|vulnerability|vulnerable|trade|procurement|globalization)\\b"
+
+dos_briefing_full$keywords<- str_detect(
+  dos_briefing_full$content, 
+  regex(deglobalization, 
+  ignore_case = TRUE))
+summary(dos_briefing_full$keywords)
+
+mentions_by_month <- dos_briefing_full %>%
+  group_by(month_year) %>%
+  summarise(
+    mentions = sum(keywords, na.rm = TRUE),
+    total = n(),
+    percent = mentions / total * 100  # Calculate percentage
+  ) %>%
+  mutate(month_year = as.Date(paste0(month_year, "-01"))) 
+
+# Plot the trend of mentions by month
+ggplot(mentions_by_month, aes(x = month_year, y = percent)) +
+  geom_col(fill = "grey25") +
+  scale_x_date(date_breaks = "6 months", date_labels = "%b %Y") +
+  theme_minimal() +
+  labs(
+    title = "Percentage of Briefings Mentioning supply chain keywords by Month",
+    x = "Month-Year",
+    y = "Percentage of Mentions"
+  ) +theme_minimal()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+Lets include the obama years to see the difference
+```{r}
+obama_full<-readRDS('obama_full.rds')
+obama_full$date<-as.Date(obama_full$date,format = "%B %d, %Y")
+obama_full$n_date[4]
+sub_2017<-dos_briefing_full %>% filter(category %in% c("Department Press Briefing ", "Special Briefing"))
+colnames(sub_2017)
+colnames(obama_full)
+sub_2017 <-sub_2017 %>% select(link,category,content,date, spokesperson)
+obama_full<-obama_full %>% select(-n_date)
+full_data<- rbind(obama_full,sub_2017)
+full_data
+```
+
+
+```{r}
+china_pattern <- "\\b(China|china|Chinese|chinese|PRC|Beijing|beijing|President Xi|Xi Jinping)\\b"
+
+full_data$China<- str_detect(
+  full_data$content, 
+  regex(china_pattern, 
+  ignore_case = TRUE))
+summary(full_data$China)
+
+
+###let's maybe aggregate this by month
+full_data$month_year <- format(full_data$date, "%Y-%m")
+full_data$year<-format(full_data$date, "%Y")
+summary(as.factor(full_data$year))
+
+mentions_by_month <- full_data %>%
+  filter(!is.na(year) & year != 2024) %>%  # Remove NA and 2024
+  group_by(year) %>%
+  summarise(
+    mentions = sum(China, na.rm = TRUE),
+    total = n(),
+    percent = mentions / total # Calculate percentage
+  ) %>%
+  mutate(
+    administration = case_when(
+      year < 2017 ~ "Obama",
+      year < 2021 ~ "Trump",
+      TRUE ~ "Biden"
+    ),
+    year = as.factor(year)  # Convert year to a factor for discrete scale
+  )
+
+summary(as.factor(full_data$year))
+class(mentions_by_month$year)
+
+# Plot the trend of mentions by month
+ggplot(mentions_by_month, aes(x = year, y = percent)) +
+  geom_col(fill= 'blue')+
+  scale_y_continuous(labels = scales::percent_format()) + 
+  theme_bw() +
+  labs(
+    title = "Percentage of Briefings China",
+    x = "Administration",
+    y = "Percentage of Mentions"
+  ) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ geom_vline(xintercept = '2017', linetype = "dashed",label = 'trump') +  # Trump takes office
+  geom_vline(xintercept ='2021', linetype = "dashed")+
+  ggeasy::easy_center_title()
+
+```
+
+let's look at supply chain
+```{r}
+
+#let's look at just the actual terms first
+deglobalization <- "\\b(derisking|de-risking|friendshoring|decoupling|shoring|diversification|diversify|supply chain|resilience|vulnerability|vulnerable|trade|procurement|globalization)\\b"
+
+trade<- "\\b(supply chain|supply chains|supply-chain|supply-chains|trade|trading|trades|import|importing|export|exporting|imports|exports|economic relation|economic relations|foreign investment|tariff|tariffs|market access|international market|economic policies|economic policy)\\b"
+
+#deglobalization <- "\\b(supply chain)diversification|diversify\\b"
+
+full_data$keywords<- str_detect(
+  full_data$content, 
+  regex(trade, 
+  ignore_case = TRUE))
+summary(full_data$keywords)
+
+##########just checking here#############
+sub_2017$keywords<- str_detect(
+  sub_2017$content, 
+  regex(deglobalization, 
+  ignore_case = TRUE))
+
+summary(sub_2017$keywords)
+
+sub_2017$china<- str_detect(
+  sub_2017$content, 
+  china_pattern)
+summary(sub_2017$china)
+
+#############################################
+
+
+# Group by this new column and count the mentions
+mentions_by_month <- full_data %>%
+  filter(!is.na(year) & year != 2024) %>%  # Remove NA and 2024
+  group_by(year) %>%
+  summarise(
+    mentions = sum(keywords, na.rm = TRUE),
+    total = n(),
+    percent = mentions / total # Calculate percentage
+  ) %>%
+  mutate(
+    administration = case_when(
+      year < 2017 ~ "Obama",
+      year < 2021 ~ "Trump",
+      TRUE ~ "Biden"
+    ),
+    year = as.factor(year)  # Convert year to a factor for discrete scale
+  )
+
+summary(as.factor(full_data$year))
+class(mentions_by_month$year)
+
+# Plot the trend of mentions by month
+ggplot(mentions_by_month, aes(x = year, y = percent)) +
+  geom_col()+
+  scale_y_continuous(labels = scales::percent_format()) + 
+  theme_bw() +
+  labs(
+    title = "Percentage of Briefings Mentioning Trade/Supply Chain",
+    x = "Administration",
+    y = "Percentage of Mentions"
+  ) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ geom_vline(xintercept = '2017', linetype = "dashed",label = 'trump') +  # Trump takes office
+  geom_vline(xintercept ='2021', linetype = "dashed")+
+  ggeasy::easy_center_title()
+
+ggplot(mentions_by_month, aes(x = year, y = total)) +
+  geom_col(fill = "grey65") +
+  theme_minimal() +
+  labs(
+    title = "Total Number of Press briefings",
+    x = "Month-Year",
+    y = "number"
+  ) +theme_bw()+
+  theme(axis.text.x = element_text( hjust = 0.5))+ 
+  geom_vline(xintercept = '2017', linetype = "dashed",label = 'trump') +  # Trump takes office
+  geom_vline(xintercept ='2021', linetype = "dashed")+
+  ggeasy::easy_center_title()
+
+```
+
+
+------------------------------------------------------------------------------------------------------------------
+
+# Cleaning the data
+- so firstly I'm not sure if I want to include the obama era so let's only look at the trump and biden era for now
+
+```{r}
+summary(as.factor(dos_briefing_full$category))
+# let's find out the difference between department press briefing, remark to the press and special briefing
+library(dplyr)
+library(purrr)
+dos_briefing_full %>%
+  group_by(category) %>%
+  slice(1) %>%
+  ungroup() %>%
+  print(content[1])
+
+dos_briefing_full$content[1516]
+
+#ok so pretty much everything start with \n
+
+```
+## Q&A pair cleaning
+```{r}
+library(dplyr)
+library(stringr)
+
+#first let's assign a briefing ID to each role
+dos_briefing_full<- dos_briefing_full %>% mutate(dos_briefing_full,briefing_ID = row_number())
+
+extract_qa_pairs <- function(content, briefing_id) {
+  # First, replace all instances of newline + all-caps word + possible additional capitalized words + colon
+  # with a unique marker, e.g., "NEW_SPEAKER"
+  content <- gsub("\n([A-Z ]+[A-Z]:)", " NEW_SPEAKER\\1", content)
+
+  # Split the content at each occurrence of "QUESTION:"
+  qas <- str_split(content, "QUESTION:")[[1]]
+  
+  qa_pairs <- data.frame(Question = character(), Answer = character(), BriefingID = integer())
+
+  # Loop through the Q&A sections
+  for (i in seq_along(qas)[-1]) {  # Skipping the first element as it won't be a question
+    # Split the current Q&A section into question and answer at the first occurrence of "NEW_SPEAKER"
+    qa_parts <- str_split(qas[i], " NEW_SPEAKER", 2)[[1]]
+    
+    if (length(qa_parts) == 2) {
+      # Remove any leading/trailing whitespace from the question
+      question <- trimws(paste0("QUESTION:", qa_parts[1]))
+      # Capture the answer, trimming again
+      answer <- trimws(gsub(" NEW_SPEAKER", "\n", qa_parts[2]))
+      
+      # Append to the qa_pairs dataframe
+      qa_pairs <- rbind(qa_pairs, data.frame(Question = question, Answer = answer, BriefingID = briefing_id))
+    }
+  }
+  
+  return(qa_pairs)
+}
+
+# Apply the function across all briefings
+qa_pairs_list <- lapply(1:nrow(dos_briefing_full), function(i) {
+  extract_qa_pairs(dos_briefing_full$content[i], dos_briefing_full$briefing_ID[i])
+})
+
+# Combine all Q&A pairs into a single data frame
+qa_dataset <- do.call(rbind, qa_pairs_list)
+
+# Ensure row names are reset
+rownames(qa_dataset) <- NULL
+dos_briefing_full <- dos_briefing_full %>% rename(BriefingID = briefing_ID)
+qa_dataset <- merge(qa_dataset, dos_briefing_full[, c("category", "date", "BriefingID")], by = "BriefingID", all.x = TRUE)
+
+# this gives me 58509 pairs (without getting rid of the follow up questions)
+qa_dataset$Content<-qa_dataset$Answer
+qa_dataset <- qa_dataset %>%
+  mutate(
+    Speaker = str_extract(Answer, "^[A-Z ]+(?=:):"), # Extracts the speaker's name which is in all caps followed by a colon
+    Answer = str_replace(Answer, "^[A-Z ]+(?=:):\\s*", ""), # Removes the speaker's name from the content
+    Speaker = str_remove(Speaker, ":") # Removes the colon from the speaker's name
+  )
+qa_dataset$Answer[1109]
+```
+
+more cleaning (narrow down to only including trade)
+```{r}
+deglobalization <- "\\b(derisking|de-risking|friendshoring|decoupling|shoring|diversification|diversify|supply chain|resilience|vulnerability|vulnerable|trade|procurement|globalization)\\b"
+
+trade <- "\\b(supply chain|supply chains|supply-chain|supply-chains|trade|trading|trades|import|importing|export|exporting|imports|exports|economic relation|economic relations|foreign investment|tariff|tariffs|market access|international market|economic policies|economic policy|commerce|commercial|merchandise|goods|services|balance of trade|trade balance|free trade|fair trade|trade deficit|trade surplus|economic cooperation|economic integration|economic zone|trade agreement|trade negotiation|trade deal|trade dispute|quota|quotas|embargo|sanction|sanctions|customs|duty|duties|trade barriers|non-tariff barriers|protectionism|anti-dumping|logistics|shipping|freight|cargo|transportation|distribution|warehousing|WTO|NAFTA|USMCA|TPP|TTIP|RCEP|FTA|bilateral trade|multilateral trade|investment|investor|investors|foreign direct investment|capital flow|capital investment|economic development|financial market|financial regulation)\\b"
+
+
+#let's just take s quick look and see the original dataset how many briefings contains trade
+
+dos_briefing_full$trade<- str_detect(
+  dos_briefing_full$content, 
+  regex(trade, 
+  ignore_case = TRUE))
+summary(dos_briefing_full$trade) 
+list_spokesperson<-unique(dos_briefing_full$spokesperson)
+view(list_spokesperson)
+dos_briefing_full %>% group_by(category) %>% 
+  summary(as.factor(dos_briefing_full$spokesperson))
+
+qa_dataset$trade<- str_detect(
+  qa_dataset$Answer, 
+  regex(trade, 
+  ignore_case = TRUE))
+summary(qa_dataset$trade) #only about 3641 out of 58k include trade
+
+china_pattern <- "\\b(China|china|Chinese|chinese|PRC|Beijing|beijing|President Xi|Xi Jinping)\\b"
+qa_dataset$china<- str_detect(
+  qa_dataset$Answer, 
+  regex(china_pattern, 
+  ignore_case = TRUE))
+summary(qa_dataset$china) # about 2k include china
+qa_dataset$date<-as.Date(qa_dataset$date, format = "%B %d, %Y")
+
+#let's filter down to a subset with only the ones that contain trade or supply chains
+dt_trade<-subset(qa_dataset, trade == TRUE)
+dt_trade$china<- str_detect(
+  dt_trade$Answer, 
+  regex(china_pattern, 
+  ignore_case = TRUE))
+summary(dt_trade$china)# 396 
+dt_trade_china<-subset(dt_trade, china == TRUE)
+dt_trade$Answer[5702]
+summary(as.factor(dt_trade$category))
+rownames(dt_trade) <- NULL
+summary(as.factor(dt_trade$Speaker))
+unique(dt_trade$Speaker)
+summary(as.factor(dt_trade$category))
+dt_trade$Answer
+dt_trade %>% filter(Speaker == '' ) %>% print(Answer[1])
+```
+
+- remove foreign speakers
+So here is the thing: I just realized that a lot of the statements are NOT made by US officials. That is bad. We need to remove entries made by foreign officials! 
+let's do this!
+```{r}
+# Assuming your dataset is in a data frame called dt_trade
+# and the speaker column is named 'SPEAKER'
+
+# List of foreign officials' names
+foreign_officials <- c(
+  "PRESIDENT ZELENSKYY", "FOREIGN SECRETARY RAAB", "EXTERNAL AFFAIRS MINISTER JAISHANKAR",
+  "FOREIGN MINISTER DE MAIO", "FOREIGN MINISTER DI MAIO", "FOREIGN MINISTER MAAS",
+  "FOREIGN MINISTER THORDARSON", "FOREIGN MINISTER MOTEGI", "PRESIDENT ALI",
+  "FOREIGN MINISTER SCHALLENBERG", "FOREIGN MINISTER KOFOD", "MINISTER AUGUSTO",
+  "FOREIGN MINISTER KAMILOV", "INTERIM PRESIDENT GUAIDO", "DEFENSE MINISTER SINGH",
+  "FOREIGN MINISTER FREELAND", "PRESIDENT BUKELE", "FOREIGN MINISTER BLOK",
+  "FOREIGN MINISTER CASSIS", "FOREIGN MINISTER LAVROV", "FOREIGN SECRETARY HUNT",
+  "FOREIGN MINISTER POPOLIZIO", "FOREIGN MINISTER AMPUERO", "FOREIGN SECRETARY LOCSIN",
+  "FOREIGN MINISTER SZIJJARTO", "FOREIGN MINISTER SHOUKRY", "POLITBURO MEMBER YANG",
+  "STATE COUNCILOR WANG", "FOREIGN MINISTER KANG", "PRESIDENT SANTOS",
+  "FOREIGN MINISTER CZAPUTOWICZ", "FOREIGN SECRETARY VIDEGARAY"
+)
+
+# Flag rows where speaker is a foreign official
+dt_trade <- dt_trade %>%
+  mutate(is_foreign_official = Speaker %in% foreign_officials)
+
+
+# Filter out rows with foreign officials
+dt_trade <- dt_trade %>%
+  filter(!is_foreign_official)
+ #3597 vs previously it was 3641 (so basically it shouldn't change a ton)
+
+
+```
+
+splitting to paragraphs
+```{r}
+# let's make sure everything is splitted perfectly
+dt_trade <- dt_trade %>% mutate(QA_ID = row_number())
+
+# Create a new dataframe to store the split paragraphs
+split_dt_trade <- data.frame(
+  date = Date(),
+  Question = character(),
+  Answer = character(),
+  BriefingID = integer(),
+  Paragraph = integer(),
+  QA_ID = integer(),
+  stringsAsFactors = FALSE
+)
+
+# Iterate over each row in the dt_trade dataset
+for (i in 1:nrow(dt_trade)) {
+  # Split the answer into paragraphs
+  paragraphs <- unlist(strsplit(dt_trade$Answer[i], "\n"))
+  
+  # Create a temporary dataframe for the current Q&A pair with split paragraphs
+  temp_df <- data.frame(
+    date = dt_trade$date[i],
+    Question = dt_trade$Question[i],
+    Answer = paragraphs,
+    BriefingID = dt_trade$BriefingID[i],
+    Paragraph = seq_along(paragraphs),
+    QA_ID = dt_trade$QA_ID[i],
+    stringsAsFactors = FALSE
+  )
+  
+  # Append the temporary dataframe to the split_dt_trade dataset
+  split_dt_trade <- rbind(split_dt_trade, temp_df)
+}
+
+# Ensure row names are reset
+rownames(split_dt_trade) <- NULL
+
+# Print summary to check the new dataset
+print(summary(split_dt_trade))
+
+split_dt_trade$Answer[355]
+
+trade_pattern <- "\\b(supply chain|supply chains|supply-chain|supply-chains|trade|trading|trades|import|importing|export|exporting|imports|exports|economic relation|economic relations|foreign investment|tariff|tariffs|market access|international market|economic policies|economic policy|commerce|commercial|merchandise|goods|services|balance of trade|trade balance|free trade|fair trade|trade deficit|trade surplus|economic cooperation|economic integration|economic zone|trade agreement|trade negotiation|trade deal|trade dispute|quota|quotas|embargo|sanction|sanctions|customs|duty|duties|trade barriers|non-tariff barriers|protectionism|anti-dumping|logistics|shipping|freight|cargo|transportation|distribution|warehousing|WTO|NAFTA|USMCA|TPP|TTIP|RCEP|FTA|bilateral trade|multilateral trade|investment|investor|investors|foreign direct investment|capital flow|capital investment|economic development|financial market|financial regulation)\\b"
+china_pattern <- "\\b(China|china|Chinese|chinese|PRC|Beijing|beijing|President Xi|Xi Jinping)\\b"
+
+split_dt_trade$trade <- str_detect(split_dt_trade$Answer, regex(trade_pattern, ignore_case = TRUE))
+summary(split_dt_trade$trade) #n = 4762
+
+# Filter for China-related content within trade-related answers
+split_dt_trade$china <- str_detect(split_dt_trade$Answer, regex(china_pattern, ignore_case = TRUE))
+summary(split_dt_trade$china) # Number of paragraphs containing China-related content about 1013
+
+# Subset for only trade-related content
+dt_trade_filtered <- subset(split_dt_trade, trade == TRUE)
+summary(dt_trade_filtered$BriefingID)
+length(unique(dt_trade_filtered$date))#955 days
+dt_trade_filtered$china <- str_detect(dt_trade_filtered$Answer, regex(china_pattern, ignore_case = TRUE))
+summary(dt_trade_filtered$china) # Number of paragraphs containing both trade and China-related content
+
+# Subset for trade and China-related content
+dt_trade_china <- subset(dt_trade_filtered, china == TRUE)
+
+# Split into Trump and Biden years
+test_trump <- subset(dt_trade_filtered, date < as.Date("2020-01-20")) # 1595
+test_biden <- subset(dt_trade_filtered, date >= as.Date("2020-01-20")) # 3166 n
+
+```
+
+## some descriptive statistics of frequency of trade related topics
+```{r}
+class(qa_dataset$date)
+qa_dataset$date<-as.Date(qa_dataset$date, format = "%B %d, %Y")
+qa_dataset$month_year <- format(qa_dataset$date, "%Y-%m")
+
+# Group by this new column and count the mentions
+mentions_by_month <- qa_dataset %>%
+  group_by(month_year) %>%
+  summarise(
+    mentions = sum(trade, na.rm = TRUE),
+    total = n(),
+    percent = mentions / total * 100  # Calculate percentage
+  ) %>%
+  mutate(month_year = as.Date(paste0(month_year, "-01"))) 
+sum(mentions_by_month$total)
+
+# Plot the trend of mentions by month
+ggplot(mentions_by_month, aes(x = month_year, y = percent)) +
+  geom_col(fill = "grey10") +
+  geom_smooth(method = "loess", color = "blue", se = FALSE)+
+  scale_x_date(date_breaks = "6 months", date_labels = "%b %Y") +
+  theme_minimal() +
+  labs(
+    title = "Percentage of Q&A pairs Mentioning Trade by Month",
+    x = "Month-Year",
+    y = "Percentage of Mentions"
+  ) +theme_minimal()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+# trade related corpus
+## first attempt at exploratory text analysis with trade-related subset (but with all)
+```{r}
+
+#install.packages('tm')
+#install.packages('topicmodels')
+library(tm)
+library(topicmodels)
+
+docs <- Corpus(VectorSource(dt_trade$Answer))
+# Apply lowercasing and standard preprocessing
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removePunctuation)
+
+expand_contractions <- function(text) {
+  contractions <- c("’re"=" are", "’s"=" is", "’ve"=" have", "n’t"=" not", "’ll"=" will", "’d"=" would")
+  for (contraction in names(contractions)) {
+    text <- gsub(contraction, contractions[[contraction]], text)
+  }
+  return(text)
+}
+docs <- tm_map(docs, content_transformer(expand_contractions))
+docs <- tm_map(docs, removeNumbers)
+
+# Assuming 'dt_trade$text_column' contains the preprocessed text
+
+docs <- tm_map(docs, content_transformer(function(x) gsub("–|-", " ", x))) # Replace different types of dashes with a space
+
+# Remove stopwords (including those potentially introduced by expanding contractions)
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+# Define and remove filler words (ensure this includes 'can' if it's not in stopwords)
+filler_words <- c("okay", "well", "um", "uh", "like", "thank you", "actually", "so", "but", "will", "can","'and","think","also", "thank","just","really","moderator")
+docs <- tm_map(docs, removeWords, filler_words)
+
+
+dtm <- DocumentTermMatrix(docs, control = list(minWordLength = 2))
+dim(dtm)
+
+
+# Run LDA
+lda_result <- LDA(dtm, k = 5)  # Adjust 'k' based on your needs
+
+# Explore the results
+topics <- terms(lda_result, 11)  # Get top terms for each topic
+print(topics)
+
+
+```
+
+
+### ok let's do this for trump and biden 
+
+so for topic modelling and the frequencies, we have decided to just use the Q&A pairs because it gives a broader pattern
+Trump
+```{r}
+#install.packages('ldatuning')
+library(ldatuning)
+# TRUMP Years
+dt_trade_filtered$Answer[444] #4762 in total
+dt_trade$date<-as.Date(dt_trade$date, format = "%B %d, %Y")
+dt_trump <- subset(dt_trade, date < as.Date("2020-01-20")) #1255 when it's only the dt_trade not split
+dt_biden <- subset(dt_trade, date >= as.Date("2020-01-20")) # 2341 when it's the none split version
+
+summary(as.factor(dt_trump$category))
+
+dt_trump %>% group_by(date) %>% 
+  summarise(frequency = length(Answer)) # fairly spead out so we are all good
+```
+
+First time cleaning the data (can probably skip in the clean version)
+```{r}
+
+# ok let's first determine the number of topic k we want to have
+docs <- Corpus(VectorSource(dt_trump$Answer))
+# Apply lowercasing and standard preprocessing
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removePunctuation)
+docs <- tm_map(docs, removeNumbers)
+docs <- tm_map(docs, removeWords, stopwords("english"))
+docs <- tm_map(docs, stripWhitespace)
+
+expand_contractions <- function(text) {
+  contractions <- c("’re"=" are", "’s"=" is", "’ve"=" have", "n’t"=" not", "’ll"=" will", "’d"=" would")
+  for (contraction in names(contractions)) {
+    text <- gsub(contraction, contractions[[contraction]], text)
+  }
+  return(text)
+}
+docs <- tm_map(docs, content_transformer(expand_contractions))
+docs <- tm_map(docs, content_transformer(function(x) gsub("–|-", " ", x))) # Replace different types of dashes with a space
+
+filler_words <- c("okay", "well", "um", "uh", "like", "thank you", "actually", "so", "but", "will", "can","'and","think","also", "thank","just","really","moderator")
+docs <- tm_map(docs, removeWords, filler_words)
+
+dtm <- DocumentTermMatrix(docs, control = list(minWordLength = 2))
+dim(dtm)
+dtm <- DocumentTermMatrix(docs, control = list(minWordLength = 2))
+
+doc.vec_test <- VectorSource(dt_trump)
+doc.corpus_test  <- Corpus(doc.vec_test)
+doc.corpus_test  <- tm_map(doc.corpus_test, tolower)
+doc.corpus_test  <- tm_map(doc.corpus_test, removePunctuation)
+doc.corpus_test  <- tm_map(doc.corpus_test, removeNumbers)
+doc.corpus_test  <- tm_map(doc.corpus_test, removeWords, stopwords("english"))
+doc.corpus_test  <- tm_map(doc.corpus_test, stripWhitespace)
+doc.corpus_test <- tm_map(doc.corpus_test, content_transformer(expand_contractions))
+doc.corpus_test <- tm_map(doc.corpus_test, content_transformer(function(x) gsub("–|-", " ", x))) # Replace different types of dashes with a space
+doc.corpus_test <- tm_map(doc.corpus_test, removeWords, filler_words)
+
+
+TDM_test <- TermDocumentMatrix(doc.corpus_test)
+DTM_test <- DocumentTermMatrix(doc.corpus_test)
+
+##plot the metrics to get number of topics
+system.time({
+  tunes <- FindTopicsNumber(
+    dtm = dtm,
+    topics = c(2:15),
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010"),
+    method = "Gibbs",
+    control = list(seed = 12345),
+    mc.cores = 4L,
+    verbose = TRUE
+  )
+}) # basically it shows it should be 6 to 8 topics
+FindTopicsNumber_plot(tunes)
+# Run LDA
+lda_result <- LDA(dtm, k = 8)  # Adjust 'k' based on your needs
+
+# Explore the results
+topics <- terms(lda_result, 10)  # Get top terms for each topic
+print(topics)
+
+# Trump seems to always be in a security framing
+```
+
+Biden
+```{r}
+# Biden Year
+docs <- Corpus(VectorSource(dt_biden$Answer))
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removePunctuation)
+docs <- tm_map(docs, removeNumbers)
+docs <- tm_map(docs, removeWords, stopwords("english"))
+docs <- tm_map(docs, stripWhitespace)
+
+expand_contractions <- function(text) {
+  contractions <- c("’re"=" are", "’s"=" is", "’ve"=" have", "n’t"=" not", "’ll"=" will", "’d"=" would")
+  for (contraction in names(contractions)) {
+    text <- gsub(contraction, contractions[[contraction]], text)
+  }
+  return(text)
+}
+docs <- tm_map(docs, content_transformer(expand_contractions))
+docs <- tm_map(docs, content_transformer(function(x) gsub("–|-", " ", x))) # Replace different types of dashes with a space
+
+filler_words <- c("okay", "well", "um", "uh", "like", "thank you", "actually", "so", "but", "will", "can","'and","think","also", "thank","just","really","moderator")
+docs <- tm_map(docs, removeWords, filler_words)
+
+dtm <- DocumentTermMatrix(docs, control = list(minWordLength = 2))
+dim(dtm)
+
+doc.vec_test <- VectorSource(dt_biden)
+doc.corpus_test  <- Corpus(doc.vec_test)
+doc.corpus_test  <- tm_map(doc.corpus_test, tolower)
+doc.corpus_test  <- tm_map(doc.corpus_test, removePunctuation)
+doc.corpus_test  <- tm_map(doc.corpus_test, removeNumbers)
+doc.corpus_test  <- tm_map(doc.corpus_test, removeWords, stopwords("english"))
+doc.corpus_test  <- tm_map(doc.corpus_test, stripWhitespace)
+doc.corpus_test <- tm_map(doc.corpus_test, content_transformer(expand_contractions))
+doc.corpus_test <- tm_map(doc.corpus_test, content_transformer(function(x) gsub("–|-", " ", x))) # Replace different types of dashes with a space
+doc.corpus_test <- tm_map(doc.corpus_test, removeWords, filler_words)
+
+
+TDM_test <- TermDocumentMatrix(doc.corpus_test)
+DTM_test <- DocumentTermMatrix(doc.corpus_test)
+
+##plot the metrics to get number of topics
+system.time({
+  tunes <- FindTopicsNumber(
+    dtm = dtm,
+    topics = c(2:15),
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010"),
+    method = "Gibbs",
+    control = list(seed = 12345),
+    mc.cores = 4L,
+    verbose = TRUE
+  )
+  
+}) # basically it shows it should be 6 to 8 topics
+FindTopicsNumber_plot(tunes) # between 6 to 8
+
+
+# Run LDA
+lda_result <- LDA(dtm, k = 8)  # Adjust 'k' based on your needs
+
+# Explore the results
+topics <- terms(lda_result, 10)  # Get top terms for each topic
+print(topics)
+
+###check for empty cells
+docs_content <- sapply(docs, as.character)
+empty_docs_indices <- which(sapply(docs_content, function(x) str_trim(x) == ""))
+
+# Output the number of empty documents
+length(empty_docs_indices)
+
+```
+
+
+
+## try key-word based filtering (isolationist vs. risk vs. partnership)
+```{r}
+
+# Example keywords for different narratives
+keywords_isolationist <- c("sufficient", "national manufacturing","cut","tariff")
+keywords_risk_centered <- c("resilience", "risk", "disruption","threat")
+keywords_partnership_centered <- c("collaboration", "trade partnerships", "international cooperation", "partnership","partner")
+
+
+dt_trade$Isolationist <- 0
+dt_trade$RiskCentered <- 0
+dt_trade$PartnershipCentered <- 0
+
+# Function to update binary indicators based on keyword presence
+update_narrative_flags <- function(text, keywords) {
+  if (any(str_detect(text, regex(paste(keywords, collapse = "|"), ignore_case = TRUE)))) {
+    return(1)
+  } else {
+    return(0)
+  }
+}
+
+# Apply the function for each narrative to each row/document
+dt_trade <- dt_trade %>%
+  rowwise() %>%
+  mutate(
+    Isolationist = update_narrative_flags(Answer, keywords_isolationist),
+    RiskCentered = update_narrative_flags(Answer, keywords_risk_centered),
+    PartnershipCentered = update_narrative_flags(Answer, keywords_partnership_centered)
+  )
+
+# Now check the summary for one of the binary columns as an example
+summary(as.factor(dt_trade$PartnershipCentered)) #432
+summary(as.factor(dt_trade$Isolationist)) #114
+summary(as.factor(dt_trade$RiskCentered)) #179
+
+
+```
+
+## find high frequency words in trade related press briefings
+first let's just set up the functions [this is not the final version]
+```{r}
+# building a clean text function
+filter_words <- c("okay", "well", "um", "uh", "like", "thank you", "actually", "so", "but", 
+                  "will", "can","'and","think","also","just","really","moderator","secretary",
+                  "one","question", "of course","today","know","going","now","say","see","get",
+                  "many","first","make","want","take questions","time","much","am","thanks",
+                  "said","work", "things","thing","look","continue","'m","take place",
+                  "take part","take","need","something","certainly","even","may","comes","come",
+                  "number","two","countries","country","part","’m",
+                  "right","mean","issues","clear","seen","made")
+
+expand_contractions <- function(text) {
+  contractions <- c("’re"=" are", "’s"=" is", "’ve"=" have", "n’t"=" not", "’ll"=" will", "’d"=" would","'m" = "am")
+  for (contraction in names(contractions)) {
+    text <- gsub(contraction, contractions[[contraction]], text)
+  }
+  return(text)
+}
+
+clean_text <- function(corpus) {
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, content_transformer(expand_contractions))
+  corpus <- replace_phrases_in_corpus(corpus, replacement_list)
+  corpus <- tm_map(corpus, content_transformer(function(x) gsub("–|-", " ", x)))
+  corpus <- tm_map(corpus, removePunctuation, preserve_intra_word_contractions = TRUE, preserve_intra_word_dashes = TRUE)
+  corpus <- tm_map(corpus, removeWords, c(stopwords("english"), filter_words))
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, stripWhitespace)
+  corpus <- tm_map(corpus, content_transformer(lemmatize_strings))
+  return(corpus)
+}
+
+# Apply the cleaning function to both corpora
+corpus_trump <- clean_text(Corpus(VectorSource(dt_trump$Answer)))
+corpus_biden <- clean_text(Corpus(VectorSource(dt_biden$Answer)))
+
+# Create a document-term matrix
+dtm_trump <- TermDocumentMatrix(corpus_trump)
+
+dtm_biden <- TermDocumentMatrix(corpus_biden)
+
+# Convert to matrix and sum over columns to get term frequencies
+term_freq_trump <- sort(rowSums(as.matrix(dtm_trump)), decreasing = TRUE)
+term_freq_biden <- sort(rowSums(as.matrix(dtm_biden)), decreasing = TRUE)
+
+
+# Convert to data frame, arrange, and slice for top terms
+term_freq_trump_df <- data.frame(term = names(term_freq_trump), freq = term_freq_trump)
+term_freq_trump_df <- data.frame(term = names(term_freq_trump), freq = term_freq_trump)%>%
+  slice(1:20)
+term_freq_biden_df <- data.frame(term = names(term_freq_biden), freq = term_freq_biden)
+
+term_freq_biden_df <- data.frame(term = names(term_freq_biden), freq = term_freq_biden)%>%
+  slice(1:20)
+
+
+ggplot(term_freq_trump_df, aes(x = reorder(term, freq), y = freq)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Frequency") +
+  coord_flip() + # Flips the axes to make it easier to read
+  theme_minimal() +
+  ggtitle("Top 20 Keywords in Trump's Era")
+
+# Biden keyword frequency plot
+ggplot(term_freq_biden_df, aes(x = reorder(term, freq), y = freq)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Frequency") +
+  coord_flip() + # Flips the axes to make it easier to read
+  theme_minimal() +
+  ggtitle("Top 20 Keywords in Biden's Era")
+  
+```
+
+examing the keywords
+```{r}
+# need to be filtered out
+##secretary, one, now
+# unsure about whether first needs to be removed
+
+mentions_secretary_trump <- dt_trump %>%
+  filter(grepl("important", Answer, ignore.case = TRUE))
+
+# Filter dt_biden where 'secretary' is mentioned
+mentions_secretary_biden <- dt_biden %>%
+  filter(grepl("say", Answer, ignore.case = TRUE))
+
+# Printing the answers (Here it is shown for Trump, repeat for Biden)
+cat(paste0(mentions_secretary_biden$Answer, "\n---\n"))
+1+1
+
+```
+
+## N-Gram analysis beyond single keywords
+```{r}
+tidy_trump <- data.frame(text = sapply(corpus_trump, as.character), stringsAsFactors = FALSE) %>%
+  tbl_df()
+
+tidy_biden <- data.frame(text = sapply(corpus_biden, as.character), stringsAsFactors = FALSE) %>%
+  tbl_df()
+
+# Define a function to create and count n-grams
+get_ngrams <- function(tidy_text_df, n) {
+  tidy_text_df %>%
+    unnest_tokens(input = text, output = ngram, token = "ngrams", n = n) %>%
+    anti_join(get_stopwords(), by = c("ngram" = "word")) %>%
+    count(ngram, sort = TRUE)
+}
+
+# Apply the function to your datasets
+bigrams_trump <- get_ngrams(tidy_trump, 2)
+bigrams_biden <- get_ngrams(tidy_biden, 2)
+
+# Examine the top bi-grams
+head(bigrams_trump)
+head(bigrams_biden)
+
+ggplot(head(bigrams_trump, 20), aes(x = reorder(ngram, n), y = n)) +
+  geom_bar(stat = "identity") +
+  xlab("Bi-gram") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Top 20 Bi-grams in Trump's Era")
+#United States; north korea; un security council; human rights
+
+
+# Plot for Biden's era
+ggplot(head(bigrams_biden, 20), aes(x = reorder(ngram, n), y = n)) +
+  geom_bar(stat = "identity") +
+  xlab("Bi-gram") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Top 20 Bi-grams in Biden's Era")
+```
+
+### let's see three words
+```{r}
+# Apply the function to your datasets
+trigrams_trump <- get_ngrams(tidy_trump, 3)
+trigrams_biden <- get_ngrams(tidy_biden, 3)
+
+# Examine the top bi-grams
+head(trigrams_trump)
+head(trigrams_biden)
+
+ggplot(head(trigrams_trump, 20), aes(x = reorder(ngram, n), y = n)) +
+  geom_bar(stat = "identity") +
+  xlab("Bi-gram") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Top 20 Bi-grams in Trump's Era")
+
+# Plot for Biden's era
+ggplot(head(trigrams_biden, 20), aes(x = reorder(ngram, n), y = n)) +
+  geom_bar(stat = "identity") +
+  xlab("Bi-gram") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Top 20 Bi-grams in Biden's Era")
+```
+
+## further cleaning for frequency purpose [ncluding the replacement list]
+```{r}
+filter_words <- c("okay", "well", "um", "uh", "like", "thank you", "actually", "so", "but", "will", "obviously","go ahead",
+                  "can", "'and", "think", "also", "thank", "just", "really", "moderator", "secretary", 
+                  "one", "question", "of course", "today", "know", "going", "now", "say", "see", "get", 
+                  "many", "first", "make", "want", "take questions", "time", "much", "am", "thanks", 
+                  "said", "work", "things", "thing", "look", "continue", "'m", "take place", "take part", 
+                  "take", "need", "something", "certainly", "even", "may", "comes", "come", "number", 
+                  "two", "countries", "country", "part", "’m", "right", "mean", "issues", "clear", "seen", 
+                  "made", "talk", "good", "include", "call", "show", "give", "ask", "come", "use", 
+                  "do", "let", "know", "think", "need", "get", "see", "say", "take", "go", "want", 
+                  "time", "work", "know", "now", "take", "look", "think","moderator","put","place","please",
+                  "last","way","issue","back","next","lot","questions")
+
+
+expand_contractions <- function(text) {
+  contractions <- c("’re" = " are", "’s" = " is", "’ve" = " have", "n’t" = " not", "’ll" = " will", "’d" = " would", "'m" = " am")
+  for (contraction in names(contractions)) {
+    text <- gsub(contraction, contractions[[contraction]], text)
+  }
+  return(text)
+}
+
+
+replace_phrases_in_corpus <- function(corpus, replacement_list) {
+  for (i in seq_along(replacement_list)) {
+    pattern <- names(replacement_list)[i]
+    replacement <- replacement_list[i]
+    corpus <- tm_map(corpus, content_transformer(gsub),
+                     pattern = pattern, replacement = replacement, fixed = FALSE)
+  }
+  return(corpus)
+}
+
+# List of phrases to replace with their replacements
+replacement_list <- c("\\bunited states\\b" = "united_states",
+                      "\\work together\\b" = "work_together",
+                      "\\bworking together\\b" = "work_together",
+                      "\\bu.s.\\b" = "united_states",
+                      "\\bnorth korea\\b" = "north_korea",
+                      "\\bnorth korean\\b" = "north_korea",
+                      "\\bhuman rights\\b" = "human_rights",
+                      "\\bun security council\\b" = "un_security_council",
+                      "\\bstate department\\b" = "state_department",
+                      "\\bsecurity council\\b" = "security_council",
+                      "\\bwork together\\b" = "work_together",
+                      "\\bworking together\\b" = "work_together",
+                      "\\bworking closely\\b" = "work_together",
+                      "\\bwork closely\\b" = "work_together",
+                      "\\bforeign minister\\b" = "foreign_minister",
+                      "\\bprc\\b" = "china",
+                      "\\bchinese\\b" = "china",
+                      "\\bbeijing\\b" = "china",
+                      "\\bvice president\\b" = "vice_president",
+                      "\\bpresident putin\\b" = "president_putin",
+                      "\\bpresident trump\\b" = "president_ptrump",
+                      "\\bpresident biden\\b" = "president_biden",
+                      "\\bpresident zelenskyy\\b" = "president_zelenskyy",
+                      "\\bindo pacific\\b" = "indo_pacific",
+                      "\\bblack sea graine initiative\\b" = "black_sea_graine_initiative",
+                      "\\bafrican business forum\\b" = "african_business_forum",
+                      "\\bpresident xi\\b" = "president_xi",
+                      "\\bpresident zelenskky\\b" = "president_zelenskyy",
+                      "\\blook forward\\b" = "look_forward",
+                      "\\bget ahead\\b" = "get_ahead",
+                      "\\bchinese government\\b" = "china",
+                      "\\bgus government\\b" = "us_government",
+                      "\\bfree trade\\b" = "free_trade",
+                      "\\btake advantage\\b" = "take_advantage",
+                      "\\bsupply chain\\b" = "supply_chain(s)",
+                      "\\bmake sure\\b" = "make_sure",
+                      "\\bsupply chains\\b" = "supply_chain(s)",
+                      "\\bshared values\\b" = "shared_values",
+                      "\\bshared interests\\b" = "shared_interests",
+                      "\\bamerican people\\b" = "american_people",
+                      "\\bus companies\\b" = "american_companies",
+                      "\\bamerican companies\\b" = "american_companies",
+                      "\\bamerican company\\b" = "american_companies",
+                      "\\bus company\\b" = "american_companies",
+                      "\\btake place\\b" = "take_place",
+                      "\\btake action\\b" = "take_action",
+                      "\\bmade clear\\b" = "made_clear",
+                      "\\brussian\\b" = "russia",
+                      "\\bpartners\\b" = "partner/ally",
+                      "\\ballies\\b" = "partner/ally",
+                      "\\open line\\b" = "open_line",
+                      "\\biranian\\b" = "iran")
+
+```
+
+
+more functions to clean the text
+```{r}
+clean_text <- function(corpus){
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, content_transformer(expand_contractions))
+  corpus <- tm_map(corpus, content_transformer(function(x) gsub("–|-", " ", x)))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeWords, c(stopwords("english"), filter_words))
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, stripWhitespace)
+  corpus <- replace_phrases_in_corpus(corpus,replacement_list)
+
+  return(corpus)
+}
+```
+
+actual cleaning
+```{r}
+corpus_trump<-Corpus(VectorSource(dt_trump$Answer))
+corpus_trump<-clean_text(corpus_trump)
+# Apply the function to the Biden corpus
+corpus_biden<-Corpus(VectorSource(dt_biden$Answer))
+corpus_biden <- clean_text(corpus_biden)
+dtm_trump <- TermDocumentMatrix(corpus_trump)
+dtm_biden <- TermDocumentMatrix(corpus_biden)
+
+doc_freq_trump <- rowSums(as.matrix(dtm_trump) > 0)
+doc_freq_biden <- rowSums(as.matrix(dtm_biden) > 0)
+
+percent_doc_freq_trump <- doc_freq_trump / ncol(dtm_trump) * 100
+percent_doc_freq_biden <- doc_freq_biden / ncol(dtm_biden) * 100
+
+# Convert to data frames and get top terms by percentage
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump)%>%arrange(desc(percent)) %>% filter(nchar(term) > 2)
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump)%>%
+  arrange(desc(percent)) %>%
+  slice(1:15)
+term_freq_trump_df
+
+
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent))
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent)) %>%
+  slice(1:15)
+
+# Plotting
+ggplot(term_freq_trump_df, aes(x = reorder(term, percent), y = percent)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage of Documents") +
+  coord_flip() + 
+  theme_minimal() +
+  ggtitle("Top 15 Keywords under Trump's administration (Percentage)")
+
+ggplot(term_freq_biden_df, aes(x = reorder(term, percent), y = percent)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage of Documents") +
+  coord_flip() + 
+  theme_minimal() +
+  ggtitle("Top 15 Keywords under Biden's administration (Percentage)")
+```
+
+making a combined graph
+```{r}
+# Convert to data frames and get top terms by percentage
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump) %>%
+  arrange(desc(percent)) %>%
+  filter(nchar(term) > 2)
+
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent)) %>%
+  filter(nchar(term) > 2)
+
+# Define a list of terms to exclude from the plot
+excluded_terms <- c("government", "sure", "time", "thanks", "today", "working","sure","new","state","able","point","terms","around","forward")
+
+# Filter the data frames for plotting by excluding the specified terms
+term_freq_trump_df <- term_freq_trump_df %>%
+  filter(!term %in% excluded_terms) %>%
+  slice(1:15) %>%
+  mutate(administration = "Trump")
+
+term_freq_biden_df <- term_freq_biden_df %>%
+  filter(!term %in% excluded_terms) %>%
+  slice(1:15) %>%
+  mutate(administration = "Biden")
+
+overlapping_terms <- intersect(term_freq_trump_df$term, term_freq_biden_df$term)
+
+# Add a column to indicate if the term is overlapping
+term_freq_trump_df <- term_freq_trump_df %>%
+  mutate(overlap = ifelse(term %in% overlapping_terms, "overlap", "unique"))
+
+term_freq_biden_df <- term_freq_biden_df %>%
+  mutate(overlap = ifelse(term %in% overlapping_terms, "overlap", "unique"))
+
+# Combine the data frames
+combined_term_freq_df <- bind_rows(term_freq_trump_df, term_freq_biden_df)
+
+combined_term_freq_df$administration<-factor(combined_term_freq_df$administration, levels = c('Trump','Biden'))
+# Create side-by-side bar plots with highlighting
+ggplot(combined_term_freq_df, aes(x = reorder(term, percent), y = percent, fill = overlap)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage Mentions") +
+  coord_flip() +
+  theme_minimal() +
+  facet_wrap(~ administration, scales = "free_y", ncol = 2) +
+  ggtitle("Top 15 Keywords (Percentage*)") +
+ labs(caption = '*Percentage refers to the proportion of Q&A pairs in which each keyword appears')+
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        legend.position = "right",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12),
+        strip.text.x = element_text(size = 14, face = "bold")) +
+  scale_fill_manual(values = c("overlap" = "black", "unique" = "gray")) +
+  theme_bw()
+```
+
+
+in terms of pure numbers
+```{r}
+
+
+# Convert to matrix and sum over columns to get term frequencies
+term_freq_trump <- sort(rowSums(as.matrix(dtm_trump)), decreasing = TRUE)
+term_freq_biden <- sort(rowSums(as.matrix(dtm_biden)), decreasing = TRUE)
+
+# Convert to data frame, arrange, and slice for top terms
+term_freq_trump_df <- data.frame(term = names(term_freq_trump), freq = term_freq_trump)
+term_freq_trump_df <- data.frame(term = names(term_freq_trump), freq = term_freq_trump)%>%
+  slice(1:15)
+term_freq_biden_df <- data.frame(term = names(term_freq_biden), freq = term_freq_biden)
+term_freq_biden_df
+
+term_freq_biden_df <- data.frame(term = names(term_freq_biden), freq = term_freq_biden)%>%
+  slice(1:15)
+
+
+ggplot(term_freq_trump_df, aes(x = reorder(term, freq), y = freq)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Frequency") +
+  coord_flip() + # Flips the axes to make it easier to read
+  theme_minimal() +
+  ggtitle("Top 15 Keywords under Trump's administration")
+
+# Biden keyword frequency plot
+ggplot(term_freq_biden_df, aes(x = reorder(term, freq), y = freq)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Frequency") +
+  coord_flip() + # Flips the axes to make it easier to read
+  theme_minimal() +
+  ggtitle("Top 15 Keywords under Biden's administration")
+# i think I have to get rid of take and work and maybe things too
+
+```
+
+### Attempt at some descriptive presentation
+```{r}
+#install.packages("wordcloud")
+library(wordcloud)
+
+# Assuming term_freq_trump_df and term_freq_biden_df are your data frames
+# with the top terms and their frequencies
+
+# Create a word cloud for Trump's top keywords
+wordcloud(words = term_freq_trump_df$term, 
+          freq = term_freq_trump_df$freq, 
+          min.freq = 1, # Minimum frequency required for the word to be plotted
+          max.words = 20, # The number of words to be plotted; you can change this as needed
+          random.order = FALSE, # Plot the most frequent words with the highest size
+          rot.per = 0.25, # The proportion of words that are vertical
+          colors = brewer.pal(8, "Dark2")) # Colors from the RColorBrewer palette
+
+# Do the same for Biden's top keywords
+wordcloud(words = term_freq_biden_df$term, 
+          freq = term_freq_biden_df$freq, 
+          min.freq = 1, 
+          max.words = 20, 
+          random.order = FALSE, 
+          rot.per = 0.25, 
+          colors = brewer.pal(8, "Dark2"))
+
+```
+
+
+## based on thie new text I can try topic modeling
+```{r}
+dtm_trump <- DocumentTermMatrix(corpus_trump, control = list(minWordLength = 2))
+dim(dtm_trump) #interesting I think we dropped some but we will see
+system.time({
+  tunes <- FindTopicsNumber(
+    dtm = dtm_trump,
+    topics = c(2:15),
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010"),
+    method = "Gibbs",
+    control = list(seed = 12345),
+    mc.cores = 4L,
+    verbose = TRUE
+  )
+}) # basically it shows it should be 6 to 8 topics
+FindTopicsNumber_plot(tunes)
+
+# Run LDA
+lda_result_trump <- LDA(dtm_trump, k = 7)  # Adjust 'k' based on your needs
+# Explore the results
+topics_trump <- terms(lda_result_trump, 20)  # Get top terms for each topic
+print(topics_trump)
+
+
+
+#biden
+dtm_biden <- DocumentTermMatrix(corpus_biden, control = list(minWordLength = 2))
+dim(dtm_biden)
+
+system.time({
+  tunes <- FindTopicsNumber(
+    dtm = dtm_biden,
+    topics = c(2:15),
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010"),
+    method = "Gibbs",
+    control = list(seed = 12345),
+    mc.cores = 4L,
+    verbose = TRUE
+  )
+}) # basically it shows it should be 6 to 8 topics
+
+FindTopicsNumber_plot(tunes)
+lda_result_biden <- LDA(dtm_biden, k = 7)  # Adjust 'k' based on your needs
+# Explore the results
+topics_biden <- terms(lda_result_biden, 20)  # Get top terms for each topic
+print(topics_biden)
+print(topics_trump)
+
+```
+
+
+take a look at the frequency of each topic
+```{r}
+# For Trump
+topic_assignments_trump <- topics(lda_result_trump)
+
+# For Biden
+topic_assignments_biden <- topics(lda_result_biden)
+
+topic_frequencies_trump <- table(topic_assignments_trump)
+print(topics_trump)
+print(topic_frequencies_trump)
+
+# For Biden
+topic_frequencies_biden <- table(topic_assignments_biden)
+topics_biden
+print(topic_frequencies_biden)
+
+df_trump <- data.frame(Topic = as.factor(names(topic_frequencies_trump)), Frequency = as.vector(topic_frequencies_trump))
+ggplot(df_trump, aes(x = Topic, y = Frequency)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Topic Frequencies - Trump") +
+  xlab("Topic") +
+  ylab("Frequency")
+
+# For Biden
+df_biden <- data.frame(Topic = as.factor(names(topic_frequencies_biden)), Frequency = as.vector(topic_frequencies_biden))
+ggplot(df_biden, aes(x = Topic, y = Frequency)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Topic Frequencies - Biden") +
+  xlab("Topic") +
+  ylab("Frequency")
+topics_biden
+```
+
+take a look at what these topics actually mean
+```{r}
+topic_proportions_trump <- posterior(lda_result_trump)$topics
+
+# Find the top documents for each topic
+top_documents_per_topic <- apply(topic_proportions_trump, 2, function(x) order(x, decreasing = TRUE)[1:5])
+
+# Print top documents for each topic
+for (topic in 1:ncol(topic_proportions_trump)) {
+  cat("Topic", topic, "\n")
+  doc_indices <- top_documents_per_topic[, topic]
+  for (doc_index in doc_indices) {
+    cat("Document", doc_index, "\n")
+    cat(as.character(corpus_trump[[doc_index]]), "\n\n")
+  }
+}
+topics_trump
+```
+
+
+
+
+## more cleaning based on the topic modeling
+- the next word
+```{r}
+
+# Assuming 'corpus_trump' and 'corpus_biden' are your SimpleCorpus objects
+# Convert corpora to data frames
+trump_text <- data.frame(text = sapply(corpus_trump, as.character), stringsAsFactors = FALSE)
+biden_text <- data.frame(text = sapply(corpus_biden, as.character), stringsAsFactors = FALSE)
+
+# Function to find words following "president"
+find_following_words <- function(df, target_word) {
+  df %>%
+    unnest_tokens(input = text, output = word, token = "words", to_lower = FALSE) %>%
+    mutate(next_word = lead(word)) %>%
+    filter(word == target_word) %>%
+    count(next_word, sort = TRUE) %>%
+    filter(!is.na(next_word)) # Remove NAs that may result from "president" being the last word
+}
+
+# Find following words for "president" in Trump's era
+following_words_trump <- find_following_words(trump_text, "forward")
+
+# Find following words for "president" in Biden's era
+following_words_biden <- find_following_words(biden_text, "forward")
+
+# Look at the results
+print(following_words_trump)
+print(following_words_biden)
+
+```
+- the word before
+```{r}
+find_previous_words <- function(df, target_word) {
+  df %>%
+    unnest_tokens(input = text, output = word, token = "words", to_lower = FALSE) %>%
+    mutate(previous_word = lag(word)) %>%  # Get the word before 'president'
+    filter(word == target_word) %>%
+    count(previous_word, sort = TRUE) %>%
+    filter(!is.na(previous_word))  # Remove NAs that result from 'president' being the first word
+}
+
+# Apply the function to Trump's and Biden's text data
+previous_words_trump <- find_previous_words(trump_text, "president")
+previous_words_biden <- find_previous_words(biden_text, "forward")
+
+# Display the results
+print(previous_words_trump)
+print(previous_words_biden)
+# should add American people
+# should add shared_values 17 
+# should probably remove issues
+```
+
+# try filter out security ones [ok this doesn't work]
+ok so the idea is clearly because I included sanction as a keyword a lot of these topics are not relevant to economic narratives
+so I want to create a thing to filter out all the security ones
+```{r}
+hard_security <- "\\b(nuclear|north Korea|north korean|iran|JCPOA|Afghanistan|Hizballah|terrorism|terrorist|venezuelan|maduro|venezuela|corruption|anti-corruption|isis|syria|un security|syrian|iran|iranian|military|denuclearization|defense|raqqa|forces|force|DPRKI|middle east|iraqi|syrian|yemen|arm|arms|violence|violent|combat|missile|weapon|weapons|peacekeeping|naval|resolution)\\b" 
+dt_trade_filtered$hard_security<- str_detect(
+  dt_trade_filtered$Answer, 
+  regex(hard_security, 
+  ignore_case = TRUE))
+summary(dt_trade_filtered$hard_security) #let's try to narrow it down by looking at keywords related to random stuff but not trade
+# i still think 2.8k is a crazy amount because previously we only had like 800 but maybe I can re run the topic model to see if there's more
+dt_trade_test<-subset(dt_trade_filtered, hard_security == FALSE)
+trump_test <- subset(dt_trade_test, date < as.Date("2020-01-20")) #910
+length(trump_china$BriefingID) #225
+biden_test <- subset(dt_trade_test, date >= as.Date("2020-01-20")) #1956
+```
+
+ok let's see about the whole thing with frequency table now
+```{r}
+corpus_trump <- clean_text(Corpus(VectorSource(trump_test$Answer)))
+
+# Apply the function to the Biden corpus
+corpus_biden <- clean_text(Corpus(VectorSource(biden_test$Answer)))
+
+dtm_trump <- TermDocumentMatrix(corpus_trump)
+dtm_biden <- TermDocumentMatrix(corpus_biden)
+
+
+doc_freq_trump <- rowSums(as.matrix(dtm_trump) > 0)
+doc_freq_biden <- rowSums(as.matrix(dtm_biden) > 0)
+
+percent_doc_freq_trump <- doc_freq_trump / ncol(dtm_trump) * 100
+percent_doc_freq_biden <- doc_freq_biden / ncol(dtm_biden) * 100
+
+# Convert to data frames and get top terms by percentage
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump)%>%arrange(desc(percent)) %>% filter(nchar(term) > 2)
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump)%>%
+  arrange(desc(percent)) %>%
+  slice(1:15)
+term_freq_trump_df
+
+
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent))
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent)) %>%
+  slice(1:15)
+
+# Plotting
+ggplot(term_freq_trump_df, aes(x = reorder(term, percent), y = percent)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage of Documents") +
+  coord_flip() + 
+  theme_minimal() +
+  ggtitle("Top 15 Keywords under Trump's administration (Percentage)")
+
+ggplot(term_freq_biden_df, aes(x = reorder(term, percent), y = percent)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage of Documents") +
+  coord_flip() + 
+  theme_minimal() +
+  ggtitle("Top 15 Keywords under Biden's administration (Percentage)")
+```
+
+make a combined graph
+```{r}
+
+# Convert to data frames and get top terms by percentage
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump) %>%
+  arrange(desc(percent)) %>%
+  filter(nchar(term) > 2)
+
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent)) %>%
+  filter(nchar(term) > 2)
+
+# Define a list of terms to exclude from the plot
+excluded_terms <- c("government", "sure", "time", "thanks", "today", "working","sure","new","state","able","point","terms","around","forward","relationship","believe","resolutions","north_korea","un_security_council","nations","president","important","including","people","whether","state_department","administration","services","senior") # unsure if I wanted to keep the United States lol
+
+# Filter the data frames for plotting by excluding the specified terms
+term_freq_trump_df <- term_freq_trump_df %>%
+  filter(!term %in% excluded_terms) %>%
+  slice(1:10) %>%
+  mutate(administration = "Trump")
+term_freq_trump_df
+
+term_freq_biden_df <- term_freq_biden_df %>%
+  filter(!term %in% excluded_terms) %>%
+  slice(1:10) %>%
+  mutate(administration = "Biden")
+term_freq_biden_df
+
+overlapping_terms <- intersect(term_freq_trump_df$term, term_freq_biden_df$term)
+
+# Add a column to indicate if the term is overlapping
+term_freq_trump_df <- term_freq_trump_df %>%
+  mutate(overlap = ifelse(term %in% overlapping_terms, "overlap", "unique"))
+
+term_freq_biden_df <- term_freq_biden_df %>%
+  mutate(overlap = ifelse(term %in% overlapping_terms, "overlap", "unique"))
+
+# Combine the data frames
+combined_term_freq_df <- bind_rows(term_freq_trump_df, term_freq_biden_df)
+combined_term_freq_df
+
+combined_term_freq_df$administration<-factor(combined_term_freq_df$administration, levels = c('Trump','Biden'))
+
+ggplot(combined_term_freq_df, aes(x = reorder(term, percent), y = percent, fill = overlap)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage Mentions") +
+  coord_flip() +
+  theme_minimal() +
+  facet_wrap(~ administration, scales = "free_y", ncol = 2) +
+  ggtitle("Top 10 Keywords in China-related Discussions (Percentage*)") +
+ labs(caption = '*Percentage refers to the proportion of Q&A pairs in which each keyword appears')+
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        legend.position = "right",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12),
+        strip.text.x = element_text(size = 14, face = "bold")) +
+  scale_fill_manual(values = c("overlap" = "black", "unique" = "gray")) +
+  theme_bw()
+
+```
+
+ok let's rerun the topic models
+```{r}
+corpus_trump<-Corpus(VectorSource(dt_trade_test$Answer))
+corpus_trump<-clean_text(corpus_trump)
+# Apply the function to the Biden corpus
+corpus_biden<-Corpus(VectorSource(dt_biden$Answer))
+corpus_biden <- clean_text(corpus_biden)
+dtm_trump <- TermDocumentMatrix(corpus_trump)
+dtm_biden <- TermDocumentMatrix(corpus_biden)
+
+dtm_trump <- DocumentTermMatrix(corpus_trump, control = list(minWordLength = 2))
+dim(dtm_trump) #interesting I think we dropped some but we will see
+system.time({
+  tunes <- FindTopicsNumber(
+    dtm = dtm_trump,
+    topics = c(2:15),
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010"),
+    method = "Gibbs",
+    control = list(seed = 12345),
+    mc.cores = 4L,
+    verbose = TRUE
+  )
+}) # basically it shows it should be 6 to 8 topics
+FindTopicsNumber_plot(tunes)
+
+# Run LDA
+lda_result_trump <- LDA(dtm_trump, k = 8)  # Adjust 'k' based on your needs
+# Explore the results
+topics_trump <- terms(lda_result_trump, 20)  # Get top terms for each topic
+print(topics_trump)
+
+
+
+#biden
+dtm_biden <- DocumentTermMatrix(corpus_biden, control = list(minWordLength = 2))
+dim(dtm_biden)
+
+system.time({
+  tunes <- FindTopicsNumber(
+    dtm = dtm_biden,
+    topics = c(2:15),
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010"),
+    method = "Gibbs",
+    control = list(seed = 12345),
+    mc.cores = 4L,
+    verbose = TRUE
+  )
+}) # basically it shows it should be 6 to 8 topics
+
+FindTopicsNumber_plot(tunes)
+lda_result_biden <- LDA(dtm_biden, k = 7)  # Adjust 'k' based on your needs
+# Explore the results
+topics_biden <- terms(lda_result_biden, 20)  # Get top terms for each topic
+print(topics_biden)
+print(topics_trump)
+
+```
+
+# Filtering down to china/asia pacidic
+```{r}
+china_related <- "\\b(China|china|Chinese|chinese|PRC|Beijing|beijing|President Xi|Xi Jinping|taiwan|indo pacific|asia pacific|taiwanese|asean|trade war|supply chains|supply chains|critical minerals|chips|semi-conductor|semiconductor|BRICS|AIIB|Shanghai|Hong Kong|Pacific)\\b" 
+dt_trade_filtered$china<- str_detect(
+  dt_trade_filtered$Answer, 
+  regex(china_related, 
+  ignore_case = TRUE))
+
+summary(dt_trade_filtered$china) #now it's 639
+dt_trade_china<-subset(dt_trade_filtered, china == TRUE)
+trump_china <- subset(dt_trade_china, date < as.Date("2020-01-20")) #146
+length(trump_china$BriefingID) #269
+biden_china <- subset(dt_trade_china, date >= as.Date("2020-01-20"))
+length(biden_china$BriefingID)#378
+length(unique(trump_china$date)) #128 days out of 361 days
+length(unique(test_trump$date))
+length(unique(biden_china$date)) #219 days out of 593 days
+```
+- taking a quick look to further filter the ones that are not related
+  - yes I'm talking baout un security resolution
+```{r}
+unsc_related<- "\\b(UN Security Council|UNSC)\\b"
+trump_china$unsc<- str_detect(
+  trump_china$Answer, 
+  regex(hard_security, ignore_case = TRUE)
+)
+hard_security
+summary(trump_china$unsc) # 65 in trump's case
+biden_china$unsc<- str_detect(
+  biden_china$Answer, 
+  regex(hard_security, ignore_case = TRUE)
+)
+
+summary(biden_china$unsc)  #101 in biden's case
+
+#OK I'll remove them [this is some deep cleaning actually]
+trump_china<-subset(trump_china, unsc == FALSE)
+biden_china<-subset(biden_china, unsc == FALSE)
+
+```
+
+
+## do the same analysis with china text
+```{r}
+corpus_trump <- clean_text(Corpus(VectorSource(trump_china$Answer)))
+corpus_biden <- clean_text(Corpus(VectorSource(biden_china$Answer)))
+
+# Create a document-term matrix
+dtm_trump <- TermDocumentMatrix(corpus_trump)
+
+dtm_biden <- TermDocumentMatrix(corpus_biden)
+
+# Convert to matrix and sum over columns to get term frequencies
+term_freq_trump <- sort(rowSums(as.matrix(dtm_trump)), decreasing = TRUE)
+term_freq_biden <- sort(rowSums(as.matrix(dtm_biden)), decreasing = TRUE)
+
+
+# Convert to data frame, arrange, and slice for top terms
+term_freq_trump_df <- data.frame(term = names(term_freq_trump), freq = term_freq_trump)
+term_freq_trump_df <- data.frame(term = names(term_freq_trump), freq = term_freq_trump)%>%
+  slice(1:20)
+term_freq_biden_df <- data.frame(term = names(term_freq_biden), freq = term_freq_biden)
+
+term_freq_biden_df <- data.frame(term = names(term_freq_biden), freq = term_freq_biden)%>%
+  slice(1:20)
+
+
+ggplot(term_freq_trump_df, aes(x = reorder(term, freq), y = freq)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Frequency") +
+  coord_flip() + # Flips the axes to make it easier to read
+  theme_minimal() +
+  ggtitle("Top 20 Keywords in Trump's Era")
+
+# Biden keyword frequency plot
+ggplot(term_freq_biden_df, aes(x = reorder(term, freq), y = freq)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Frequency") +
+  coord_flip() + # Flips the axes to make it easier to read
+  theme_minimal() +
+  ggtitle("Top 20 Keywords in Biden's Era")
+  
+```
+
+
+## N-Gram analysis beyond single keywords
+```{r}
+tidy_trump <- data.frame(text = sapply(corpus_trump, as.character), stringsAsFactors = FALSE) %>%
+  tbl_df()
+
+tidy_biden <- data.frame(text = sapply(corpus_biden, as.character), stringsAsFactors = FALSE) %>%
+  tbl_df()
+
+# Define a function to create and count n-grams
+get_ngrams <- function(tidy_text_df, n) {
+  tidy_text_df %>%
+    unnest_tokens(input = text, output = ngram, token = "ngrams", n = n) %>%
+    anti_join(get_stopwords(), by = c("ngram" = "word")) %>%
+    count(ngram, sort = TRUE)
+}
+
+# Apply the function to your datasets
+bigrams_trump <- get_ngrams(tidy_trump, 2)
+bigrams_biden <- get_ngrams(tidy_biden, 2)
+
+# Examine the top bi-grams
+head(bigrams_trump)
+head(bigrams_biden)
+
+ggplot(head(bigrams_trump, 20), aes(x = reorder(ngram, n), y = n)) +
+  geom_bar(stat = "identity") +
+  xlab("Bi-gram") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Top 20 Bi-grams in Trump's Era")
+#United States; north korea; un security council; human rights
+
+
+# Plot for Biden's era
+ggplot(head(bigrams_biden, 20), aes(x = reorder(ngram, n), y = n)) +
+  geom_bar(stat = "identity") +
+  xlab("Bi-gram") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Top 20 Bi-grams in Biden's Era")
+```
+
+### let's see three words
+```{r}
+# Apply the function to your datasets
+trigrams_trump <- get_ngrams(tidy_trump, 3)
+trigrams_biden <- get_ngrams(tidy_biden, 3)
+
+# Examine the top bi-grams
+head(trigrams_trump)
+head(trigrams_biden)
+
+ggplot(head(trigrams_trump, 20), aes(x = reorder(ngram, n), y = n)) +
+  geom_bar(stat = "identity") +
+  xlab("Bi-gram") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Top 20 Bi-grams in Trump's Era")
+
+# Plot for Biden's era
+ggplot(head(trigrams_biden, 20), aes(x = reorder(ngram, n), y = n)) +
+  geom_bar(stat = "identity") +
+  xlab("Bi-gram") +
+  ylab("Frequency") +
+  coord_flip() +
+  theme_minimal() +
+  ggtitle("Top 20 Bi-grams in Biden's Era")
+```
+
+## further cleaning for frequency purpose
+here I'm trying to update my replacement list so that it matches better
+```{r}
+
+replacement_list <- c(
+  "\\bunited states\\b" = "united_states",
+  "\\bu.s.\\b" = "united_states",
+  "\\bnorth korea\\b" = "north_korea",
+  "\\bnorth korean\\b" = "north_korea",
+  "\\bhuman rights\\b" = "human_rights",
+  "\\bun security councilresolution\\b" = "un_security_council_resolution",
+  "\\bsouth china sea\\b" = "south_china_sea",
+  "\\bstate department\\b" = "state_department",
+  "\\bsecurity council\\b" = "security_council",
+  "\\bwork together\\b" = "work_together",
+  "\\bworking together\\b" = "work_together",
+  "\\bworking closely\\b" = "work_together",
+  "\\bcoming together\\b" = "work_together",
+  "\\bwork closely\\b" = "work_together",
+  "\\bforeign minister\\b" = "foreign_minister",
+  "\\bprc\\b" = "china",
+  "\\bchinese\\b" = "china",
+  "\\bbeijing\\b" = "china",
+  "\\bvice president\\b" = "vice_president",
+  "\\bpresident putin\\b" = "president_putin",
+  "\\bpresident trump\\b" = "president_trump",
+  "\\bpresident biden\\b" = "president_biden",
+  "\\bpresident zelenskyy\\b" = "president_zelenskyy",
+  "\\bindo pacific\\b" = "indo_pacific",
+  "\\biasia pacific\\b" = "asia_pacific",
+  "\\bblack sea graine initiative\\b" = "black_sea_graine_initiative",
+  "\\bafrican business forum\\b" = "african_business_forum",
+  "\\bpresident xi\\b" = "president_xi",
+  "\\bpresident zelenskky\\b" = "president_zelenskyy",
+  "\\blook forward\\b" = "look_forward",
+  "\\bget ahead\\b" = "get_ahead",
+  "\\bchinese government\\b" = "china",
+  "\\bus government\\b" = "us_government",
+  "\\btake advantage\\b" = "take_advantage",
+  "\\bsupply chain\\b" = "supply_chain",
+  "\\bmake sure\\b" = "make_sure",
+  "\\bsupply chains\\b" = "supply_chains",
+  "\\bshared values\\b" = "shared_values",
+  "\\bshared interests\\b" = "shared_interests",
+  "\\bamerican people\\b" = "american_people",
+  "\\bus companies\\b" = "american_companies",
+  "\\bamerican companies\\b" = "american_companies",
+  "\\bamerican company\\b" = "american_companies",
+  "\\bus company\\b" = "american_companies",
+  "\\btake place\\b" = "take_place",
+  "\\btake action\\b" = "take_action",
+  "\\bmade clear\\b" = "made_clear",
+  "\\brussian\\b" = "russia",
+  "\\bpartner\\b" = "partner_allies",
+  "\\bally\\b" = "partner_allies",
+  "\\bpartners\\b" = "partner_allies",
+  "\\ballies\\b" = "partner_allies",
+  "\\bopen line\\b" = "open_line",
+  "\\biranian\\b" = "iran",
+  "\\bfree trade agreement\\b" = "free_trade_agreement",
+  "\\beuropean commission\\b" = "european_commission",
+  "\\bde couple\\b" = "decouple"
+)
+
+```
+
+let's do some percentage ones first to see a general pattern
+```{r}
+# Apply the function to the Trump corpus
+corpus_trump <- clean_text(Corpus(VectorSource(trump_china$Answer)))
+
+# Apply the function to the Biden corpus
+corpus_biden <- clean_text(Corpus(VectorSource(biden_china$Answer)))
+
+dtm_trump <- TermDocumentMatrix(corpus_trump)
+dtm_biden <- TermDocumentMatrix(corpus_biden)
+
+
+doc_freq_trump <- rowSums(as.matrix(dtm_trump) > 0)
+doc_freq_biden <- rowSums(as.matrix(dtm_biden) > 0)
+
+percent_doc_freq_trump <- doc_freq_trump / ncol(dtm_trump) * 100
+percent_doc_freq_biden <- doc_freq_biden / ncol(dtm_biden) * 100
+
+# Convert to data frames and get top terms by percentage
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump)%>%arrange(desc(percent)) %>% filter(nchar(term) > 2)
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump)%>%
+  arrange(desc(percent)) %>%
+  slice(1:15)
+term_freq_trump_df
+
+
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent))
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent)) %>%
+  slice(1:15)
+
+# Plotting
+ggplot(term_freq_trump_df, aes(x = reorder(term, percent), y = percent)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage of Documents") +
+  coord_flip() + 
+  theme_minimal() +
+  ggtitle("Top 15 Keywords under Trump's administration (Percentage)")
+
+ggplot(term_freq_biden_df, aes(x = reorder(term, percent), y = percent)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage of Documents") +
+  coord_flip() + 
+  theme_minimal() +
+  ggtitle("Top 15 Keywords under Biden's administration (Percentage)")
+```
+make a combined graph
+```{r}
+
+# Convert to data frames and get top terms by percentage
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump) %>%
+  arrange(desc(percent)) %>%
+  filter(nchar(term) > 2)
+
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent)) %>%
+  filter(nchar(term) > 2)
+
+# Define a list of terms to exclude from the plot
+excluded_terms <- c("government", "sure", "time", "thanks", "today", "working","sure","new","state","able","point","terms","around","forward","china","relationship","believe","resolutions","north_korea","un_security_council","nations","president","important","including","people","whether","talked","year") # unsure if I wanted to keep the United States lol
+
+# Filter the data frames for plotting by excluding the specified terms
+term_freq_trump_df <- term_freq_trump_df %>%
+  filter(!term %in% excluded_terms) %>%
+  slice(1:10) %>%
+  mutate(administration = "Trump")
+term_freq_trump_df
+
+term_freq_biden_df <- term_freq_biden_df %>%
+  filter(!term %in% excluded_terms) %>%
+  slice(1:10) %>%
+  mutate(administration = "Biden")
+
+overlapping_terms <- intersect(term_freq_trump_df$term, term_freq_biden_df$term)
+
+# Add a column to indicate if the term is overlapping
+term_freq_trump_df <- term_freq_trump_df %>%
+  mutate(overlap = ifelse(term %in% overlapping_terms, "overlap", "unique"))
+
+term_freq_biden_df <- term_freq_biden_df %>%
+  mutate(overlap = ifelse(term %in% overlapping_terms, "overlap", "unique"))
+
+# Combine the data frames
+combined_term_freq_df <- bind_rows(term_freq_trump_df, term_freq_biden_df)
+combined_term_freq_df
+
+combined_term_freq_df$administration<-factor(combined_term_freq_df$administration, levels = c('Trump','Biden'))
+
+ggplot(combined_term_freq_df, aes(x = reorder(term, percent), y = percent, fill = overlap)) +
+  geom_bar(stat = "identity") +
+  xlab("Keyword") +
+  ylab("Percentage Mentions") +
+  coord_flip() +
+  theme_minimal() +
+  facet_wrap(~ administration, scales = "free_y", ncol = 2) +
+  ggtitle("Top 10 Keywords in China-related Discussions (Percentage*)") +
+ labs(caption = '*Percentage refers to the proportion of Q&A pairs in which each keyword appears')+
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        legend.position = "right",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12),
+        strip.text.x = element_text(size = 14, face = "bold")) +
+  scale_fill_manual(values = c("overlap" = "black", "unique" = "gray")) +
+  theme_bw()
+
+```
+
+### before and after words
+- the next word
+```{r}
+
+# Assuming 'corpus_trump' and 'corpus_biden' are your SimpleCorpus objects
+# Convert corpora to data frames
+trump_text <- data.frame(text = sapply(corpus_trump, as.character), stringsAsFactors = FALSE)
+biden_text <- data.frame(text = sapply(corpus_biden, as.character), stringsAsFactors = FALSE)
+
+# Function to find words following "president"
+find_following_words <- function(df, target_word) {
+  df %>%
+    unnest_tokens(input = text, output = word, token = "words", to_lower = FALSE) %>%
+    mutate(next_word = lead(word)) %>%
+    filter(word == target_word) %>%
+    count(next_word, sort = TRUE) %>%
+    filter(!is.na(next_word)) # Remove NAs that may result from "president" being the last word
+}
+
+# Find following words for "president" in Trump's era
+following_words_trump <- find_following_words(trump_text, "world")
+
+# Find following words for "president" in Biden's era
+following_words_biden <- find_following_words(biden_text, "world")
+
+# Look at the results
+print(following_words_trump)
+print(following_words_biden)
+
+```
+- the word before
+```{r}
+find_previous_words <- function(df, target_word) {
+  df %>%
+    unnest_tokens(input = text, output = word, token = "words", to_lower = FALSE) %>%
+    mutate(previous_word = lag(word)) %>%  # Get the word before 'president'
+    filter(word == target_word) %>%
+    count(previous_word, sort = TRUE) %>%
+    filter(!is.na(previous_word))  # Remove NAs that result from 'president' being the first word
+}
+
+# Apply the function to Trump's and Biden's text data
+previous_words_trump <- find_previous_words(trump_text, "couple")
+previous_words_biden <- find_previous_words(biden_text, "commission")
+
+# Display the results
+print(previous_words_trump)
+print(previous_words_biden)
+
+```
+### Attempt at some descriptive presentation
+```{r}
+excluded_terms <- c("government", "sure", "time", "thanks", "today", "working","sure","new","state","able","point","terms","around","forward","china","relationship","believe","resolutions","yesterday","whether","year","un_security_council","north_korea")
+term_freq_trump_df <- data.frame(term = names(percent_doc_freq_trump), percent = percent_doc_freq_trump) %>%
+  arrange(desc(percent)) %>%
+  filter(nchar(term) > 2)%>% 
+  filter(percent >= 5)
+
+
+term_freq_biden_df <- data.frame(term = names(percent_doc_freq_biden), percent = percent_doc_freq_biden) %>%
+  arrange(desc(percent)) %>%
+  filter(nchar(term) > 2) %>% 
+  filter(percent >= 5)
+
+term_freq_trump_df <- term_freq_trump_df %>%
+  filter(!term %in% excluded_terms)
+term_freq_biden_df <- term_freq_biden_df %>%
+  filter(!term %in% excluded_terms)
+
+# Create a word cloud for Trump's top keywords
+wordcloud2(data = term_freq_trump_df, 
+           size = 0.5,         # Adjust size parameter
+           color = 'random-dark', 
+           backgroundColor = "white", 
+           minSize = 0.5,      # Minimum size of words
+           fontFamily = "Arial", 
+           shape = 'circle')
+
+# Do the same for Biden's top keywords
+wordcloud2(data = term_freq_biden_df, 
+           size = 0.5,         # Adjust size parameter
+           color = 'random-dark', 
+           backgroundColor = "white", 
+           minSize = 0.5,      # Minimum size of words
+           fontFamily = "Times New Roman", 
+           shape = 'circle')
+
+```
+## tipic modelling
+```{r}
+dtm_trump <- DocumentTermMatrix(corpus_trump, control = list(minWordLength = 2))
+dim(dtm_trump)#119
+system.time({
+  tunes <- FindTopicsNumber(
+    dtm = dtm_trump,
+    topics = c(2:15),
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010"),
+    method = "Gibbs",
+    control = list(seed = 12345),
+    mc.cores = 4L,
+    verbose = TRUE
+  )
+}) # seems like it's always 6 to 8 lol
+FindTopicsNumber_plot(tunes)
+
+# Run LDA
+lda_result_trump <- LDA(dtm_trump, k = 7)  # Adjust 'k' based on your needs
+# Explore the result
+topics_trump <- terms(lda_result_trump, 15)  # Get top terms for each topic
+print(topics_trump)
+# in 2020, trump signed an executive order ending fullbright exchanges
+
+
+#biden
+dtm_biden <- DocumentTermMatrix(corpus_biden, control = list(minWordLength = 2))
+dim(dtm_biden)
+
+system.time({
+  tunes <- FindTopicsNumber(
+    dtm = dtm_biden,
+    topics = c(2:15),
+    metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010"),
+    method = "Gibbs",
+    control = list(seed = 12345),
+    mc.cores = 4L,
+    verbose = TRUE
+  )
+}) # basically it shows it should be 6 to 8 topics
+FindTopicsNumber_plot(tunes)
+# i woult say this needs a bit more but 8 is fine
+lda_result_biden <- LDA(dtm_biden, k = 6)  # Adjust 'k' based on your needs
+# Explore the results
+topics_biden <- terms(lda_result_biden, 15)  # Get top terms for each topic
+print(topics_biden)
+
+```
+
+look into each topics
+- first, the frequency
+```{r}
+# For Trump
+topic_assignments_trump <- topics(lda_result_trump)
+
+# For Biden
+topic_assignments_biden <- topics(lda_result_biden)
+
+topic_frequencies_trump <- table(topic_assignments_trump)
+print(topics_trump)
+print(topic_frequencies_trump)
+
+# For Biden
+topic_frequencies_biden <- table(topic_assignments_biden)
+topics_biden
+print(topic_frequencies_biden)
+
+df_trump <- data.frame(Topic = as.factor(names(topic_frequencies_trump)), Frequency = as.vector(topic_frequencies_trump))
+ggplot(df_trump, aes(x = Topic, y = Frequency)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Topic Frequencies - Trump") +
+  xlab("Topic") +
+  ylab("Frequency")
+
+# For Biden
+df_biden <- data.frame(Topic = as.factor(names(topic_frequencies_biden)), Frequency = as.vector(topic_frequencies_biden))
+ggplot(df_biden, aes(x = Topic, y = Frequency)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Topic Frequencies - Biden") +
+  xlab("Topic") +
+  ylab("Frequency")
+topics_biden
+```
+
+take a look at what these topics actually mean
+```{r}
+topic_proportions_trump <- posterior(lda_result_trump)$topics
+
+# Find the top documents for each topic
+top_documents_per_topic <- apply(topic_proportions_trump, 2, function(x) order(x, decreasing = TRUE)[1:5])
+
+# Print top documents for each topic
+for (topic in 1:ncol(topic_proportions_trump)) {
+  cat("Topic", topic, "\n")
+  doc_indices <- top_documents_per_topic[, topic]
+  for (doc_index in doc_indices) {
+    cat("Document", doc_index, "\n")
+    cat(as.character(corpus_trump[[doc_index]]), "\n\n")
+  }
+}
+
+```
+
+
+## network visualization
+```{r}
+
+dtm_trump_m <- as.matrix(dtm_trump)
+dtm_biden_m <- as.matrix(dtm_biden)
+
+# Find terms that frequently co-occur with "china"
+term_associations_trump <- findAssocs(dtm_trump, "trade", 0.2)  # Adjust the threshold as needed
+term_associations_biden <- findAssocs(dtm_biden, "trade", 0.2)  # Adjust the threshold as needed
+
+# Convert to data frame for visualization
+term_associations_df_trump <- as.data.frame(term_associations_trump)
+term_associations_df_biden <- as.data.frame(term_associations_biden)
+
+term_associations_df_trump <- term_associations_df_trump %>%
+  rownames_to_column(var = "term") %>%
+  gather(key = "trade", value = "correlation", -term)
+term_associations_df_trump
+
+#look at the relevant terms only
+excluded_terms <- c("obvious","specifically","dealt","estimation","known","makes","according","annually","chain","creates","hence","result","working","got","relations","simply","way","folks","remind","press","hoping","sides","president","fine","part","leading","numbers")
+
+# Filter the data frames for plotting by excluding the specified terms
+term_associations_df_trump <- term_associations_df_trump %>%
+  filter(!term %in% excluded_terms) 
+
+term_associations_df_biden <- term_associations_df_biden %>%
+  rownames_to_column(var = "term") %>%
+  gather(key = "trade", value = "correlation", -term)
+term_associations_df_biden
+
+excluded_terms <- c("follow","relationship","space","cetera","keeping","opinion","paid","republic","state","earlier","phase","pittsburgh","czech")
+
+# Filter the data frames for plotting by excluding the specified terms
+term_associations_df_biden <- term_associations_df_biden %>%
+  filter(!term %in% excluded_terms) 
+
+# Function to plot term association network
+plot_term_network <- function(term_associations_df, title) {
+  # Create a graph object from the dataframe
+  graph <- graph_from_data_frame(term_associations_df)
+  
+  # Plot the graph using ggraph
+  ggraph(graph, layout = "fr") + 
+    geom_edge_link(aes(edge_color = correlation), show.legend = TRUE) + 
+    geom_node_point(color = 'lightblue', size = 5) + 
+    geom_node_text(aes(label = name), vjust = 1.5, hjust = 0.5, size = 4, repel = TRUE) + 
+    scale_edge_color_gradient(low = "grey80", high = "darkred", name = "Correlation") +
+    theme_void() + 
+    ggtitle(title) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      legend.position = "right",
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 12)
+    )
+}
+
+# Example usage for Trump
+plot_term_network(term_associations_df_trump, "Term Association Network for Trade related narratives (Trump)")
+
+# Example usage for Biden
+plot_term_network(term_associations_df_biden, "Term Association Network for Trade related narratives (Biden)")
+
+```
+
+an attempt at sentiment analysis [this is not the most useful ont but okay]
+```{r}
+
+
+# Function to extract sentences containing a specific keyword
+extract_sentences_keyword <- function(text, keyword) {
+  sentences <- unlist(str_split(text, "\\.\\s*")) # Split text into sentences
+  keyword_sentences <- sentences[str_detect(sentences, keyword)]
+  return(keyword_sentences)
+}
+
+# Define keywords
+keywords <- c("trade", "China", "supply chains","sactions","partners","free trade")
+
+# Extract relevant sentences for Trump and Biden
+extract_relevant_sentences <- function(corpus, keywords) {
+  lapply(keywords, function(keyword) {
+    corpus %>%
+      mutate(relevant_sentences = sapply(Answer, extract_sentences_keyword, keyword = keyword)) %>%
+      filter(lengths(relevant_sentences) > 0) %>%
+      pull(relevant_sentences) %>%
+      unlist()
+  })
+}
+
+trump_sentences <- extract_relevant_sentences(trump_china, keywords)
+biden_sentences <- extract_relevant_sentences(biden_china, keywords)
+
+# Function to calculate sentiment scores
+get_sentiment <- function(sentences) {
+  sentiments <- get_nrc_sentiment(sentences)
+  avg_positive <- mean(sentiments$positive)
+  avg_negative <- mean(sentiments$negative)
+  avg_sentiment <- avg_positive - avg_negative
+  return(avg_sentiment)
+}
+
+# Calculate sentiment scores for Trump and Biden sentences
+trump_sentiments <- sapply(trump_sentences, get_sentiment)
+biden_sentiments <- sapply(biden_sentences, get_sentiment)
+
+# Function to calculate sentiment scores
+get_sentiment <- function(sentences) {
+  sentiments <- get_nrc_sentiment(sentences)
+  avg_positive <- mean(sentiments$positive)
+  avg_negative <- mean(sentiments$negative)
+  avg_sentiment <- avg_positive - avg_negative
+  return(avg_sentiment)
+}
+
+# Calculate sentiment scores for Trump and Biden sentences
+trump_sentiments <- sapply(trump_sentences, get_sentiment)
+biden_sentiments <- sapply(biden_sentences, get_sentiment)
+
+# Combine sentiment scores with keywords
+trump_sentiment_df <- data.frame(keyword = keywords, sentiment = trump_sentiments)
+biden_sentiment_df <- data.frame(keyword = keywords, sentiment = biden_sentiments)
+
+# Print results
+print("Trump Sentiment Scores:")
+print(trump_sentiment_df)
+
+print("Biden Sentiment Scores:")
+print(biden_sentiment_df)
+
+
+```
+
+
+
+
+for china and uspply chains
+```{r}
+
+# Find terms that frequently co-occur with "china"
+term_associations_trump <- findAssocs(dtm_trump, "supply_chains", 0.1)  # Adjust the threshold as needed
+term_associations_biden <- findAssocs(dtm_biden, "supply_chains", 0.2)  # Adjust the threshold as needed
+
+# Convert to data frame for visualization
+term_associations_df_trump <- as.data.frame(term_associations_trump)
+term_associations_df_biden <- as.data.frame(term_associations_biden)
+
+term_associations_df_trump <- term_associations_df_trump %>%
+  rownames_to_column(var = "term") %>%
+  gather(key = "supply_chains", value = "correlation", -term)
+term_associations_df_trump
+
+excluded_terms <- c("due","bryan","although","fourth","harris","toward","happens","house","long","night","stage","biden","ensure","white","night","finish","finished","long","executive","latter")
+
+# Filter the data frames for plotting by excluding the specified terms
+term_associations_df_trump <- term_associations_df_trump %>%
+  filter(!term %in% excluded_terms) 
+
+term_associations_df_biden <- term_associations_df_biden %>%
+  rownames_to_column(var = "term") %>%
+  gather(key = "trade", value = "correlation", -term)
+term_associations_df_biden
+
+
+# Filter the data frames for plotting by excluding the specified terms
+term_associations_df_biden <- term_associations_df_biden %>%
+  filter(!term %in% excluded_terms) 
+# Function to plot term association network
+plot_term_network <- function(term_associations_df, title) {
+  # Create a graph object from the dataframe
+  graph <- graph_from_data_frame(term_associations_df)
+  
+  # Plot the graph using ggraph
+  ggraph(graph, layout = "fr") + 
+    geom_edge_link(aes(edge_color = correlation), show.legend = TRUE) + 
+    geom_node_point(color = 'lightblue', size = 5) + 
+    geom_node_text(aes(label = name), vjust = 1.5, hjust = 0.5, size = 3, repel = TRUE) + 
+    scale_edge_color_gradient(low = "yellow", high = "darkblue", name = "Correlation") +
+    theme_void() + 
+    ggtitle(title) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      legend.position = "right",
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 10)
+    )
+}
+
+# Example usage for Trump
+plot_term_network(term_associations_df_trump, "Term Association Network for Trade related narratives (Trump)")
+
+# Example usage for Biden
+plot_term_network(term_associations_df_biden, "Term Association Network for Suppply Chain (Biden)")
+
+```
+
+
+let's do a wordcloud of  these terms related to supply chains
+```{r}
+term_associations_biden <- findAssocs(dtm_biden, "supply_chains", 0.1)  # Adjust the threshold as needed
+
+term_associations_df_biden <- as.data.frame(term_associations_biden)
+
+
+term_associations_df_biden <- term_associations_df_biden %>%
+  rownames_to_column(var = "term") %>%
+  pivot_longer(cols = -term, names_to = "supply_chains", values_to = "correlation")
+
+# Ensure correlation is numeric and rescale to a suitable range
+term_associations_df_biden <- term_associations_df_biden %>%
+  mutate(correlation = as.numeric(correlation),
+         freq = correlation * 100)
+excluded_terms <- c("due","bryan","although","fourth","harris","toward","happens","house","long","night","stage","biden","ensure","white","night","finish","finished","long","executive","latter","assistant","sheet","left","outbreaks","monday","sessions","updated","parcel","elements","night")
+term_associations_df_biden <- term_associations_df_biden %>%
+  filter(!term %in% excluded_terms) 
+
+
+# Create a word cloud for Biden's top keywords
+wordcloud2(data = term_associations_df_biden %>% select(term, freq), 
+           size = 0.25,         # Adjust size parameter
+           color = 'random-dark', 
+           backgroundColor = "white", 
+           minSize = 0.1,      # Minimum size of words
+           fontFamily = "Arial", 
+           shape = 'circle')
+```
+
+
+## narratives and dictionary
+ok first let's create dictionaries for the three narratives
+```{r}
+# Decoupling Dictionary
+decoupling_dict <- c("sanctions", "ban", "restriction", "separate","decouple","decoupling","cut","restrict")
+
+# De-risking Dictionary
+derisking_dict <- c("security", "threat", "risk", "protect", "safe","resilient","resilience")
+
+# Friendshoring Dictionary
+friendshoring_dict <- c("partner", "ally", "cooperation","partner/ally", "collaboration", "friendship","work closely","like_minded","value","values")
+
+```
+extract relevant sentences
+```{r}
+extract_sentences <- function(corpus, dictionary) {
+  sentences <- sapply(corpus, as.character)
+  related_sentences <- sentences[grepl(paste(dictionary, collapse = "|"), sentences, ignore.case = TRUE)]
+  return(related_sentences)
+}
+
+# Extract sentences related to each narrative
+decoupling_sentences_trump <- extract_sentences(corpus_trump, decoupling_dict)
+derisking_sentences_trump <- extract_sentences(corpus_trump, derisking_dict)
+friendshoring_sentences_trump <- extract_sentences(corpus_trump, friendshoring_dict)
+
+decoupling_sentences_biden <- extract_sentences(corpus_biden, decoupling_dict)
+derisking_sentences_biden <- extract_sentences(corpus_biden, derisking_dict)
+friendshoring_sentences_biden <- extract_sentences(corpus_biden, friendshoring_dict)
+
+
+```
+count overlaps
+```{r}
+
+count_entries <- function(corpus_trump, corpus_biden, decoupling_dict, derisking_dict, friendshoring_dict) {
+  # Helper function to count entries based on dictionary
+  count_entries_dict <- function(corpus, dictionary) {
+    content <- sapply(corpus, as.character)
+    sapply(dictionary, function(word) sum(str_detect(content, word)))
+  }
+  
+  # Helper function to count entries for combined keywords
+  count_combined_entries <- function(corpus, dict1, dict2) {
+    content <- sapply(corpus, as.character)
+    sapply(dict1, function(word1) {
+      sapply(dict2, function(word2) {
+        sum(str_detect(content, word1) & str_detect(content, word2))
+      })
+    }) %>% sum()
+  }
+  
+  # Count individual dictionary entries
+  decoupling_trump <- sum(count_entries_dict(corpus_trump, decoupling_dict) > 0)
+  derisking_trump <- sum(count_entries_dict(corpus_trump, derisking_dict) > 0)
+  friendshoring_trump <- sum(count_entries_dict(corpus_trump, friendshoring_dict) > 0)
+  
+  decoupling_biden <- sum(count_entries_dict(corpus_biden, decoupling_dict) > 0)
+  derisking_biden <- sum(count_entries_dict(corpus_biden, derisking_dict) > 0)
+  friendshoring_biden <- sum(count_entries_dict(corpus_biden, friendshoring_dict) > 0)
+  
+  # Count combined dictionary entries
+  decoupling_derisking_trump <- count_combined_entries(corpus_trump, decoupling_dict, derisking_dict)
+  decoupling_friendshoring_trump <- count_combined_entries(corpus_trump, decoupling_dict, friendshoring_dict)
+  derisking_friendshoring_trump <- count_combined_entries(corpus_trump, derisking_dict, friendshoring_dict)
+  
+  decoupling_derisking_biden <- count_combined_entries(corpus_biden, decoupling_dict, derisking_dict)
+  decoupling_friendshoring_biden <- count_combined_entries(corpus_biden, decoupling_dict, friendshoring_dict)
+  derisking_friendshoring_biden <- count_combined_entries(corpus_biden, derisking_dict, friendshoring_dict)
+  
+  # Count entries with all three dictionaries
+  all_three_trump <- sum(sapply(decoupling_dict, function(word1) {
+    sapply(derisking_dict, function(word2) {
+      sapply(friendshoring_dict, function(word3) {
+        sum(str_detect(sapply(corpus_trump, as.character), word1) & str_detect(sapply(corpus_trump, as.character), word2) & str_detect(sapply(corpus_trump, as.character), word3))
+      })
+    })
+  }))
+  
+  all_three_biden <- sum(sapply(decoupling_dict, function(word1) {
+    sapply(derisking_dict, function(word2) {
+      sapply(friendshoring_dict, function(word3) {
+        sum(str_detect(sapply(corpus_biden, as.character), word1) & str_detect(sapply(corpus_biden, as.character), word2) & str_detect(sapply(corpus_biden, as.character), word3))
+      })
+    })
+  }))
+  
+  # Return the counts as a list
+  list(
+    trump = list(
+      decoupling = decoupling_trump,
+      derisking = derisking_trump,
+      friendshoring = friendshoring_trump,
+      decoupling_derisking = decoupling_derisking_trump,
+      decoupling_friendshoring = decoupling_friendshoring_trump,
+      derisking_friendshoring = derisking_friendshoring_trump,
+      all_three = all_three_trump
+    ),
+    biden = list(
+      decoupling = decoupling_biden,
+      derisking = derisking_biden,
+      friendshoring = friendshoring_biden,
+      decoupling_derisking = decoupling_derisking_biden,
+      decoupling_friendshoring = decoupling_friendshoring_biden,
+      derisking_friendshoring = derisking_friendshoring_biden,
+      all_three = all_three_biden
+    )
+  )
+}
+counts <- count_entries(corpus_trump, corpus_biden, decoupling_dict, derisking_dict, friendshoring_dict)
+
+
+```
+let's graph it
+```{r}
+prepare_data <- function(counts) {
+  data <- data.frame(
+    Category = c("Decoupling", "Derisking", "Friendshoring", 
+                 "Decoupling & Derisking", "Decoupling & Friendshoring", 
+                 "Derisking & Friendshoring", "All Three"),
+    Trump = c(counts$trump$decoupling, counts$trump$derisking, counts$trump$friendshoring,
+              counts$trump$decoupling_derisking, counts$trump$decoupling_friendshoring,
+              counts$trump$derisking_friendshoring, counts$trump$all_three),
+    Biden = c(counts$biden$decoupling, counts$biden$derisking, counts$biden$friendshoring,
+              counts$biden$decoupling_derisking, counts$biden$decoupling_friendshoring,
+              counts$biden$derisking_friendshoring, counts$biden$all_three)
+  )
+  data_long <- data %>% 
+    pivot_longer(cols = c("Trump", "Biden"), names_to = "Administration", values_to = "Count")
+  return(data_long)
+}
+
+# Prepare the data for plotting
+data_long <- prepare_data(counts)
+data_long
+
+# Create the bar plot
+ggplot(data_long, aes(x = Category, y = Count, fill = Administration)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = Count), position = position_dodge(width = 0.9), vjust = -0.3) +
+  theme_minimal() +
+  labs(title = "Distribution of Economic Narratives",
+       x = "Category",
+       y = "Count") +theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+# Create the bar plot with descending order and flipped axes
+ggplot(data_long, aes(x = reorder(Category, -Count), y = Count, fill = Administration)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = Count), position = position_dodge(width = 0.9), hjust = -0.3) +
+  theme_minimal() +
+  labs(title = "Distribution of Economic Narratives",
+       x = "Category",
+       y = "Count") +theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Adjusting the x-axis labels
+  coord_flip()
+
+```
+let's look at percentage
+```{r}
+# Calculate total counts for each administration
+total_counts <- data_long %>%
+  group_by(Administration) %>%
+  summarise(Total = sum(Count))
+
+# Merge total counts back with the original data
+data_long <- data_long %>%
+  left_join(total_counts, by = "Administration") %>%
+  mutate(Percentage = (Count / Total) * 100)
+
+data_long$Administration<-factor(data_long$Administration,levels = c('Trump','Biden'))
+# Create the bar plot with percentages
+ggplot(data_long, aes(x = reorder(Category, -Percentage), y = Percentage, fill = Administration)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = sprintf("%.1f%%", Percentage)), position = position_dodge(width = 0.9), hjust = -0.3) +
+  theme_minimal() +
+  labs(title = "Distribution of Economic Narratives by Percentage",
+       x = "Category",
+       y = "Percentage") +theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Adjusting the x-axis labels
+  coord_flip()
+
+```
+
+
